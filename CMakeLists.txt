@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.13)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Initialise pico_sdk from installed location
@@ -28,14 +29,14 @@ set(PICO_BOARD pico2 CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(deploy_pico2/pico_sdk_import.cmake)
 
-project(blink C CXX ASM)
+project(app C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(blink
+add_executable(app
     deploy_pico2/main.c
   codegen/Source/genModel.c
   codegen/Source/depthwise_kernel3x3_stride1_inplace_CHW_fpreq.c
@@ -53,7 +54,7 @@ add_executable(blink
     )
 
 
-target_include_directories(blink PRIVATE
+target_include_directories(app PRIVATE
   deploy/cmsis_shim
   TinyEngine/include
   codegen/Include
@@ -63,17 +64,21 @@ target_include_directories(blink PRIVATE
 )
 
 # pull in common dependencies
-target_link_libraries(blink pico_stdlib m)
-target_compile_options(blink PRIVATE 
+target_link_libraries(app pico_stdlib m cmsis_core)
+target_compile_options(app PRIVATE 
 -Wno-error=incompatible-pointer-types
 -Wno-error=implicit-function-declaration
 -Wno-error=int-conversion
 
 )
 # create map/bin/hex file etc.
-pico_add_extra_outputs(blink)
+pico_add_extra_outputs(app)
 # ... existing cmake configuration ...
-# pico_set_binary_type(blink no_flash) # Directs linker to RAM
+# pico_set_binary_type(app no_flash) # Directs linker to RAM
 # Enable printing over USB CDC (Virtual COM Port)
-pico_enable_stdio_usb(blink 1)
+pico_enable_stdio_usb(app 1)
+# Generate a .su file for every source file compiled
+target_compile_options(app PRIVATE "-fstack-usage")
+
 # add url via pico_set_program_url
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--print-memory-usage")
