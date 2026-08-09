@@ -16,7 +16,9 @@
 # Target ISA:  ARMv7E-M
 # ----------------------------------------------------------------------
 
-from .allocator.firstFit import FirstFit
+from .allocator.milp_allocator import MILPAllocator
+
+from .operators.basic_utils import allign_byte_to_n
 from .constant import (
     FUSE_SGD_UPDATE_STR,
     FUSHION_CONFIG,
@@ -26,6 +28,15 @@ from .constant import (
     TTYPE_TRAINING_ACTIVATION,
     TTYPE_TRAINING_GRADIENT,
     TTYPE_TRAINING_WEIGHTS,
+)
+
+from .operators import add, avgpool2d, conv2d, depthwiseConv2d
+from .operators.right_inplace import right_inplace_gap_unpadded_ext
+INPLACE_OPS = (
+    add.Add,
+    avgpool2d.AvgPool2d,
+    conv2d.Conv2d,
+    depthwiseConv2d.DepthwiseConv2d,
 )
 
 
@@ -41,6 +52,7 @@ class GeneralMemoryScheduler:
         mem_visual_path="codegen/allocation.png",
         VisaulizeTrainable=True,
         sort_by_lifetime=False,
+        allign_memory_32=False
     ):
         self.layer = layer
         self.heads = 0
@@ -58,13 +70,14 @@ class GeneralMemoryScheduler:
         self.bias = 0
         self.scale = 0
         self.code = 0
-        self.allocator = FirstFit(memory_limit, sort_by_lifetime)
+        self.allocator = MILPAllocator(memory_limit, sort_by_lifetime, allign_memory_32)
         self.outputTables = outputTables
         self.USE_INPLACE = inplace
         self.mem_visual_path = mem_visual_path
         self.tflite_op = tflite_op
         self.dummy_address = dummy_address
         self.VisaulizeTrainable = VisaulizeTrainable
+        self.allign_memory_32 = allign_memory_32
 
         # for showing layer-wise memory usage
         self.layermem = []
@@ -76,49 +89,9 @@ class GeneralMemoryScheduler:
         return False
 
     def allocateMemory(self):
-        # assign the same graph index for inplace operations
-        # note: we need to handle stride == 2 for int8 depthwise to save memory
-        if self.USE_INPLACE:
-            for i, op in enumerate(self.layer):
-                if op.params["op"] == "DEPTHWISE_CONV_2D" and op.params["input_dtype"] == "int8" and not self.tflite_op:
-                    # set the idx of output and next layer input
-                    previous_output_idx = op.output_tensors[0].graph_idx
-                    op.output_tensors[0].graph_idx = op.input_tensors[0].graph_idx
-                    if (
-                        i + 1 < len(self.layer)
-                        and len(self.layer[i + 1].input_tensors) > 0
-                        and str(self.layer[i + 1].input_tensors[0].graph_idx) == str(previous_output_idx)
-                    ):
-                        self.layer[i + 1].input_tensors[0].graph_idx = op.input_tensors[0].graph_idx
-                    # update following ops' tensors
-                    for following_idx in range(i, len(self.layer)):
-                        for cnt, inp_tensor in enumerate(self.layer[following_idx].input_tensors):
-                            if str(inp_tensor.graph_idx) == str(previous_output_idx):
-                                inp_tensor.graph_idx = op.input_tensors[0].graph_idx
-                if (
-                    op.params["op"] == "TRANSPOSE_CONV_2D"
-                    and op.params["group"] == op.params["input_c"]
-                    and op.params["group"] == op.params["output_c"]
-                    and not self.tflite_op
-                    and op.params["stride_h"] == 1
-                    and op.params["stride_w"] == 1
-                ):
-                    # set the idx of output and next layer input
-                    previous_output_idx = op.output_tensors[0].graph_idx
-                    op.output_tensors[0].graph_idx = op.input_tensors[0].graph_idx
-                    # update following ops' tensors
-                    for following_idx in range(i, len(self.layer)):
-                        for cnt, inp_tensor in enumerate(self.layer[following_idx].input_tensors):
-                            if inp_tensor.graph_idx == previous_output_idx:
-                                inp_tensor.graph_idx = op.input_tensors[0].graph_idx
-                                # set the name in params which will be used later
-                                if (
-                                    cnt == 1
-                                    and "CONV" in self.layer[following_idx].params["op"]
-                                    and isinstance(self.layer[following_idx].params["weight_value"], str)
-                                ):
-                                    self.layer[following_idx].params["weight_value"] = op.input_tensors[0].graph_idx
-
+        # NOTE: I am not sure what this section of code does, but it is never activate as
+        # self.outputTables is always None in my test, so I will leave it as is for now.
+        assert self.outputTables is None or (isinstance(self.outputTables, list) and len(self.outputTables) == 0), "outputTables is must be None or a list for this version of the code"
         num_layers = len(self.layer)
         # add all trainable tensors as one tensor
         length_model = len(self.layer)
@@ -158,8 +131,51 @@ class GeneralMemoryScheduler:
                     weight_size += int(out_t.len * dtype_multiplier)
             else:
                 pass
+        assert not self.VisaulizeTrainable, f"Training is currently not supported this disables that."
         if self.VisaulizeTrainable:
             self.allocator.addTensor(0, length_model, trainable, type=TTYPE_STATIC_WEIGHT)
+
+        # If op is an inplace op and input is not input to another op; is the input is
+        # only used by this op, the we set it to be inplace to overwrite the input esle false
+        # so we have to scan through the whole graph to check if each op *(first)* input
+        # isn't an input to another op so we don't overwrite
+        for i, op in enumerate(self.layer):
+            if isinstance(op, INPLACE_OPS):
+                t = op.input_tensors[0]
+                gap = 0
+                inplace = True
+                idx = i+1
+                for idx in range(i+1, len(self.layer)):
+                    for input_t in self.layer[idx].input_tensors:
+                        if str(t.graph_idx) == str(input_t.graph_idx):
+                            inplace = False
+
+                if inplace and i != 0:
+                    assert str(t.graph_idx) == str(self.layer[i-1].output_tensors[0].graph_idx), (
+                        "For a layer to be inplace, the input of the layer has to the output of the "
+                        f"preciding layer, so the directly overwriing that output but for layer {i} "
+                        f"the input {t.graph_idx} and output {self.layer[i-1].output_tensors[0].graph_idx} "
+                        "are not the same"
+                    )
+
+                if isinstance(op, conv2d.Conv2d):
+                    # adding gap to the output tensor only for conv2d,
+                    # to cater for the inplace convolution head room
+                        params = op.params
+                        gap = right_inplace_gap_unpadded_ext(
+                            cin=params['input_c'], cout=params['output_c'],
+                            k_h=params['kernel_h'], k_w=params['kernel_w'],
+                            hin=params['input_h'], win=params['input_w'],
+                            s_h=params['stride_h'], s_w=params['stride_w'],
+                            d_h=params['dilation_h'], d_w=params['dilation_w'],
+                            p_h=params['padding_h'], p_w=params['padding_w']
+                        )
+                # alligning the memory so the memmove operation is not fragmented which speeds it up
+                op.output_tensors[0].inplace = inplace
+                op.output_tensors[0].gap = allign_byte_to_n(gap, (32 if self.allign_memory_32 else 4))
+                op.output_tensors[0].inplace_tensor = t
+            else:
+                raise AttributeError(f"Unaccounted Layerr {op} {op.params['op']}")
 
         all_t_size = 0
         # go through all tensors in the model
@@ -170,34 +186,15 @@ class GeneralMemoryScheduler:
                 if t.allocator_idx is None:
                     unallocated_tensors.append(t)
             for cnt, t in enumerate(op.output_tensors):
-                if (
-                    cnt == 0
-                    and not (
-                        self.USE_INPLACE
-                        and op.params["op"] == "DEPTHWISE_CONV_2D"
-                        and op.params["input_dtype"] == "int8"
-                        and not self.tflite_op
-                    )
-                    and not (
-                        self.USE_INPLACE
-                        and op.params["op"] == "TRANSPOSE_CONV_2D"
-                        and op.params["group"] == op.params["input_c"]
-                        and op.params["group"] == op.params["output_c"]
-                        and not self.tflite_op
-                        and op.params["stride_h"] == 1
-                        and op.params["stride_w"] == 1
-                    )
-                ):
-                    if t.allocator_idx is None:
-                        unallocated_tensors.append(t)
-                # assume seocnd outputs will not be inplace updated
-                else:
-                    if t.allocator_idx is None:
-                        unallocated_tensors.append(t)
+                if t.allocator_idx is None:
+                    unallocated_tensors.append(t)
 
             # add each tensor
             training_start_idx = _find_training_idx(layers=self.layer)
+            assert training_start_idx == len(self.layer), \
+                f"The current implementation does not support traning yet, this is a guide for that"
             for cnt, t in enumerate(unallocated_tensors):
+                t.allign_memory_32 = self.allign_memory_32
                 start_idx = i
                 # TODO: this is temp solution
                 if training_start_idx > i and "out_multiply" not in t.graph_idx:
@@ -208,6 +205,11 @@ class GeneralMemoryScheduler:
                     for input_t in self.layer[idx].input_tensors:
                         if str(t.graph_idx) == str(input_t.graph_idx):
                             end_idx = idx + 1
+                # If the tensor is a result of an inplace operation, this guides against
+                # its inplace_tensor and itself being potential_overlap_tensors because as the output
+                # is written the input becomes overwritten
+                start_idx += (1 if t.inplace else 0)
+                assert isinstance(end_idx, int), f"end_idx is not set for tensor {t.graph_idx} in layer {i}"
                 # check if this is output
                 ttype = TTYPE_INFERNECE
                 if self.outputTables is not None and not FUSHION_CONFIG[FUSE_SGD_UPDATE_STR]:
@@ -225,7 +227,10 @@ class GeneralMemoryScheduler:
                     if t in op.input_tensors:
                         start_idx = 0
                 # add the tensor
-                t.allocator_idx = self.allocator.addTensor(start_idx, end_idx, t.len(), name=t.graph_idx, type=ttype)
+                t.allocator_idx = self.allocator.addTensor(
+                    start_idx, end_idx, t.len(), name=t.graph_idx, type=ttype, inplace=t.inplace, gap=t.gap, 
+                    inplace_tensor_idx=None if t.inplace_tensor is None else t.inplace_tensor.allocator_idx
+                )
                 # propagate the allocation to tensors with the same idx
                 for j in range(i + 1, num_layers):
                     opp = self.layer[j]
@@ -299,20 +304,9 @@ class GeneralMemoryScheduler:
                     if r["name"] == op.params["weight_name"]:
                         r["type"] = TTYPE_TRAINING_WEIGHTS
 
-        # find out int8 inplace depthwise conv and stride == 2
-        for i, op in enumerate(self.layer):
-            if (
-                op.params["op"] == "DEPTHWISE_CONV_2D"
-                and op.params["input_dtype"] == "int8"
-                and op.params["stride_h"] == op.params["stride_w"] == 2
-            ):
-                if op.input_tensors[0].allocator_idx == op.output_tensors[0].allocator_idx:
-                    self.allocator.rectangles[op.input_tensors[0].allocator_idx]["stride2_inplace_idx"] = i
-
-        # Reorder the rectangles to decide which tensor needs to be scheduled first
-        self.allocator.sortSize()
+        # Allocating a memory location for each tensor/rectangle
         self.allocator.allocate()
-        self.allocator.visualize(self.mem_visual_path)
+        # self.allocator.visualize(self.mem_visual_path)
         self._enlargeBuffer("input_output", self.allocator.get_peak())
 
         # sanity check, see if all tensors have been allocated

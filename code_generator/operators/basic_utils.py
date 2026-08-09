@@ -227,10 +227,39 @@ class tensor:
         self.size = (self.size[0], self.size[1], h)
 
     def len(self):
-        byte_cnt = math.ceil(np.prod(self.size) * self.byte_size[self.dtype])
-        # align the memory to 4
-        byte_cnt = math.ceil(byte_cnt / 4) * 4
-        return byte_cnt
+        return allign_byte_to_n(np.prod(self.size) * self.byte_size[self.dtype], (32 if self.allign_memory_32 else 4))
+
+    @property
+    def inplace(self):
+        return getattr(self, "_inplace", False)
+
+    @inplace.setter
+    def inplace(self, value: bool):
+        self._inplace = value
+
+    @property
+    def gap(self):
+        return getattr(self, "_gap", 0)
+
+    @gap.setter
+    def gap(self, value: int):
+        self._gap = value
+
+    @property
+    def inplace_tensor(self):
+        return getattr(self, "_inplace_tensor", None)
+
+    @inplace_tensor.setter
+    def inplace_tensor(self, value: "tensor"):
+        self._inplace_tensor = value
+
+    @property
+    def allign_memory_32(self):
+        return getattr(self, "_allign_memory_32", False)
+
+    @allign_memory_32.setter
+    def allign_memory_32(self, value: bool):
+        self._allign_memory_32 = value
 
 
 def overwrite_dicts(src, dst):
@@ -241,6 +270,9 @@ def overwrite_dicts(src, dst):
             pass
             # warnings.warn(f"given key:{k} is not used in src dict")
 
+def allign_byte_to_n(byte_cnt, n=None):
+    n = n or 4
+    return math.ceil(byte_cnt / n) * n
 
 def deep_copy_dicts(dst):
     return deepcopy(dst)

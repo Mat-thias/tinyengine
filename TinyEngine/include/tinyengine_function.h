@@ -121,10 +121,10 @@ tinyengine_status mat_mul_fp(const float *matA, const uint16_t matA_row, const u
                              const uint16_t matB_col, float *output);
 
 tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
-    const q7_t *input, const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch, const q7_t *kernel,
+    q7_t *input, const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch, const q7_t *kernel,
     const int32_t *bias, const float *scales, const int32_t output_offset, const int32_t input_offset,
     const int32_t output_activation_min, const int32_t output_activation_max, q7_t *output, const uint16_t output_x,
-    const uint16_t output_y, const uint16_t output_ch, q15_t *runtime_buf, q15_t *kbuf, q7_t pad_value);
+    const uint16_t output_y, const uint16_t output_ch, q15_t *runtime_buf, q15_t *kbuf, q7_t pad_value, const int32_t gap);
 
 tinyengine_status add_fpreq(int size, const int8_t *input1_data, const float input1_scale, const float input1_zero,
                             const int8_t *input2_data, const float input2_scale, const float input2_zero,

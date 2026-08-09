@@ -33,11 +33,12 @@ from code_generator.constant import (
 
 
 class BaseAllocator:
-    def __init__(self, SRAM, sort_by_lifetime=False):
+    def __init__(self, SRAM, sort_by_lifetime=False, allign_memory_32=False):
         self.rectangles = []
         self.SRAM = SRAM
         self.sort_by_lifetime = sort_by_lifetime
-
+        self.allign_memory_32 = allign_memory_32
+    
     # Description: add a tensor to schedule, return the index of the rectangle
     # Note: placement -1 indicates no placed yet
     def addTensor(
@@ -48,9 +49,19 @@ class BaseAllocator:
         placement=-1,
         name=None,
         type="activation",
-        stride2_inplace_idx=None,
+        inplace=False,
+        gap=0,
+        inplace_tensor_idx=None
     ) -> int:
         tensor_idx = len(self.rectangles)
+        if inplace:
+            assert inplace_tensor_idx is not None, \
+                f"When it is an inplace tensor, the inplace_tensor_idx must be given"
+            assert isinstance(inplace_tensor_idx, int) and inplace_tensor_idx >= 0, \
+                f"when it is an inplace_tensor, the inplace_tensor_idx must be a not negative integer"
+            assert inplace_tensor_idx < tensor_idx, \
+                f"the inplace source rectangle {inplace_tensor_idx} must be registered before tensor {tensor_idx}"
+
         self.rectangles.append(
             {
                 "start": start,
@@ -60,9 +71,18 @@ class BaseAllocator:
                 "name": name,
                 "type": type,
                 "idx": tensor_idx,
-                "stride2_inplace_idx": stride2_inplace_idx,
+                "inplace": inplace,
+                "gap": gap,
+                "inplace_tensor_idx": inplace_tensor_idx,
+                # Memory actually touched while this tensor is live. Same as "size"
+                # for an ordinary tensor. This is to accomodate for layers that require
+                # right shift for their inplace operations like convolution.
+                "effective_size": size,
             }  # if this is set, we only need 1/4 of it after
         )
+        if inplace:
+            input_rec = self.rectangles[inplace_tensor_idx]
+            input_rec["effective_size"] = max(input_rec["effective_size"], gap + input_rec["size"], size)
         return tensor_idx
 
     def getIdxAddress(self, idx):
@@ -107,7 +127,10 @@ class BaseAllocator:
     def get_peak(self):
         peak = 0
         for rec in self.rectangles:
-            rec_size = rec["placement"] + rec["size"]
+            # effective_size, not size: the buffer has to be large enough for the
+            # right-inplace workspace (gap + input) too, otherwise the generated
+            # buffer is short by exactly the amount the memmove overruns.
+            rec_size = rec["placement"] + rec["effective_size"]
             if peak < rec_size:
                 peak = rec_size
         return peak

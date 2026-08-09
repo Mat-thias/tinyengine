@@ -21,16 +21,17 @@
 #include "arm_nnsupportfunctions.h"
 #include "img2col_element.h"
 #include "tinyengine_function.h"
+#include "right_inplace.h"
 
 tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
-		const q7_t *input, const uint16_t input_x, const uint16_t input_y,
+		q7_t *input, const uint16_t input_x, const uint16_t input_y,
 		const uint16_t input_ch, const q7_t *kernel, const int32_t *bias,
 		const float *scales, const int32_t output_offset,
 		const int32_t input_offset, const int32_t output_activation_min,
 		const int32_t output_activation_max, q7_t *output,
 		const uint16_t output_x, const uint16_t output_y,
 		const uint16_t output_ch, q15_t *runtime_buf, q15_t *kbuf,
-		q7_t pad_value) {
+		q7_t pad_value, const int32_t gap) {
 	const int kernel_y = 3;
 	const int kernel_x = 3;
 
@@ -39,6 +40,8 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 	/* Generate two columns from the input tensor a GEMM computation */
 	q15_t *two_column_buf = runtime_buf;
 	q7_t *out = output;
+
+	RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
 
 	q15_t pad16 = pad_value;
 	const int16_t inoff16 = input_offset;
