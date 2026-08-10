@@ -5,10 +5,8 @@
 #include <stdlib.h>
 
 #include "genNN.h"
+#include "genModelShape.h"
 #include "pico/stdlib.h"
-
-#define INPUT_SIZE (160 * 160 * 3)
-#define NUM_CLASSES 1000
 
 int main(void) {
     stdio_init_all();
