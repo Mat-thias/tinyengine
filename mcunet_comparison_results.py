@@ -76,8 +76,9 @@ RESULTS_FILE = "../results/mcunet_comparison.csv"
 SUMMARY_RESULTS_FILE = "../results/mcunet_summary_comparison.csv"
 LOG_FILE = "../results/mcunet_comparison_results.log"
 
-PICO_SOURCE_DIR = {".": "deploy_pico2"}
-DEFAULT_PICO_SOURCE_DIR = "deploy/pico2"
+# One Pico project builds either tree, selected by -DTINYENGINE_ROOT, so both
+# sides of the benchmark run the same main.c.
+PICO_SOURCE_DIR = "deploy_pico2"
 DEFAULT_SDK_PATH = os.path.expanduser("~/.pico-sdk/sdk/2.2.0")
 
 # Usable SRAM per board, less a margin for the SDK, stacks and USB buffers.
@@ -178,19 +179,18 @@ def read_model_shape():
     }
 
 
-def build_firmware(pico_board, cwd="."):
+def build_firmware(pico_board, root="."):
     """
-    Build the Pico firmware for whatever `cwd` last generated. Returns the
-    uf2 path, relative to `cwd`.
+    Build the Pico firmware for the tree at `root`. Separate build dirs keep
+    the two configurations from clobbering each other. Returns the uf2 path.
     """
-    source_dir = PICO_SOURCE_DIR.get(cwd, DEFAULT_PICO_SOURCE_DIR)
-    build_dir = os.path.join(source_dir, "build")
+    build_dir = os.path.join(PICO_SOURCE_DIR, "build", os.path.basename(os.path.abspath(root)))
     sdk = os.environ.get("PICO_SDK_PATH", DEFAULT_SDK_PATH)
     cmd_runner(
-        f"PICO_SDK_PATH={sdk} cmake -S {source_dir} -B {build_dir} -DPICO_BOARD={pico_board}",
-        cwd=cwd,
+        f"PICO_SDK_PATH={sdk} cmake -S {PICO_SOURCE_DIR} -B {build_dir} "
+        f"-DPICO_BOARD={pico_board} -DTINYENGINE_ROOT={os.path.abspath(root)}"
     )
-    cmd_runner(f"cmake --build {build_dir} -j$(nproc)", cwd=cwd)
+    cmd_runner(f"cmake --build {build_dir} -j$(nproc)")
     return os.path.join(build_dir, "blink.uf2")
 
 
@@ -266,7 +266,7 @@ def parse_pico_output(stdout):
     }
 
 
-def run_on_board(x, peak_mem, pico_board, timeout, port, cwd=".", label="right-inplace"):
+def run_on_board(x, peak_mem, pico_board, timeout, port, root=".", label="right-inplace"):
     """
     Build, flash and read back one model from the tree at `cwd`. Returns None
     if it cannot be run, so the caller records the row either way.
@@ -281,7 +281,7 @@ def run_on_board(x, peak_mem, pico_board, timeout, port, cwd=".", label="right-i
         return None
 
     try:
-        uf2_path = build_firmware(pico_board, cwd=cwd)
+        uf2_path = build_firmware(pico_board, root=root)
     except subprocess.CalledProcessError as error:
         print_subprocess_error_message(error)
         return None
@@ -289,7 +289,7 @@ def run_on_board(x, peak_mem, pico_board, timeout, port, cwd=".", label="right-i
     try:
         # -f forces a running device to reboot into BOOTSEL first, so this works
         # whether or not the board is already there. -x runs it after flashing.
-        cmd_runner(f"picotool load -f -x -v {uf2_path}", cwd=cwd)
+        cmd_runner(f"picotool load -f -x -v {uf2_path}")
     except subprocess.CalledProcessError as error:
         print_subprocess_error_message(error)
         return None
@@ -363,7 +363,7 @@ with open(RESULTS_FILE, "w", newline="") as file:
             if args.baseline_comparison:
                 base_dev = run_on_board(
                     x, baseline_peak_mem, args.pico_board, args.timeout, args.port,
-                    cwd=args.baseline_comparison, label="baseline",
+                    root=args.baseline_comparison, label="baseline",
                 ) or {}
             dev = run_on_board(
                 x, peak_mem, args.pico_board, args.timeout, args.port, label="right-inplace"

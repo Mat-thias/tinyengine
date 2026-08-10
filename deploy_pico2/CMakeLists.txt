@@ -19,6 +19,8 @@
 #
 # Sources come from codegen/, which holds whichever model was generated last
 # by examples/mcunet_inx.py, so no model is named here.
+#
+# -DTINYENGINE_ROOT=../tinyengine builds an unmodified checkout with this same main.c.
 
 # Generated Cmake Pico project file
 
@@ -55,7 +57,12 @@ project(blink C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-get_filename_component(TINYENGINE_ROOT ${CMAKE_CURRENT_LIST_DIR}/.. ABSOLUTE)
+# Which tree to build. Defaults to the one this file lives in; point it at an
+# unmodified checkout to build that instead. It selects codegen/ and
+# TinyEngine/ together, so each build gets a model and the kernels it was
+# generated for.
+get_filename_component(_default_root ${CMAKE_CURRENT_LIST_DIR}/.. ABSOLUTE)
+set(TINYENGINE_ROOT ${_default_root} CACHE PATH "TinyEngine tree to build")
 
 file(GLOB TINYENGINE_GENERATED_KERNELS CONFIGURE_DEPENDS
   ${TINYENGINE_ROOT}/codegen/Source/depthwise_*_inplace_CHW_fpreq.c)

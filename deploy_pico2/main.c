@@ -26,7 +26,7 @@
 
 // Define a magic anchor pattern to fill the unallocated stack space
 #define STACK_MAGIC_PATTERN 0xDEADBEEF
-#define AVERAGE_RUN         1
+#define AVERAGE_RUN         100
 
 // Pull in the linker symbols tracking where the stack boundaries sit
 extern uint32_t __StackLimit;
@@ -118,11 +118,8 @@ int main(void) {
         uint32_t cycle_count = measure_code_cycles(invoke_inf);
         uint32_t stack_size = get_used_stack_bytes();
         int32_t checksum = get_checksum(output);
-        load_input(input);
         uint64_t duration_us = measure_code_duration(invoke_inf);
 
-        /* Two runs of the same work: the checksums must agree, otherwise the
-        * second inference saw different input from the first. */
         printf("cycles       = %lu\n", (unsigned long)cycle_count);
         printf("duration     = %llu us\n", (unsigned long long)duration_us);
         printf("stack used = %lu bytes\n", (unsigned long)stack_size);
