@@ -21,17 +21,16 @@
 #include "arm_nnsupportfunctions.h"
 #include "img2col_element.h"
 #include "tinyengine_function.h"
-#include "right_inplace.h"
 
 tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
-		q7_t *input, const uint16_t input_x, const uint16_t input_y,
+		const q7_t *input, const uint16_t input_x, const uint16_t input_y,
 		const uint16_t input_ch, const q7_t *kernel, const int32_t *bias,
 		const float *scales, const int32_t output_offset,
 		const int32_t input_offset, const int32_t output_activation_min,
 		const int32_t output_activation_max, q7_t *output,
 		const uint16_t output_x, const uint16_t output_y,
 		const uint16_t output_ch, q15_t *runtime_buf, q15_t *kbuf,
-		q7_t pad_value, const int32_t gap) {
+		q7_t pad_value) {
 	const int kernel_y = 3;
 	const int kernel_x = 3;
 
@@ -40,8 +39,6 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 	/* Generate two columns from the input tensor a GEMM computation */
 	q15_t *two_column_buf = runtime_buf;
 	q7_t *out = output;
-
-	RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
 
 	q15_t pad16 = pad_value;
 	const int16_t inoff16 = input_offset;
@@ -108,6 +105,7 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 			/* This part implements the im2col function */
 			const int16_t base_idx_y = (i_out_y * 2) - 1;
 			const int16_t base_idx_x = (i_out_x * 2) - 1;
+			const q15_t *col_buffer = two_column_buf;
 
 			//use variables
 			q31_t in_q7x4;
@@ -127,7 +125,7 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 			q15_t *dst3;
 
 			int input_row_offset = 3 * input_x;
-			dst = two_column_buf;
+			dst = col_buffer;
 			dst2 = dst + 9;
 			dst3 = dst2 + 9;
 			if (base_idx_y != -1) {
