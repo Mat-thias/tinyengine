@@ -18,45 +18,45 @@
 #ifndef TINYENGINE_INCLUDE_FP_REQUANTIZE_OP_H_
 #define TINYENGINE_INCLUDE_FP_REQUANTIZE_OP_H_
 
-tinyengine_status convolve_1x1_s8_ch8_fpreq(const q7_t *input,
+tinyengine_status convolve_1x1_s8_ch8_fpreq(q7_t *input,
 		const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch,
 		const q7_t *kernel, const int32_t *bias, const float *scales,
 		const int32_t out_offset, const int32_t input_offset,
 		const int32_t out_activation_min, const int32_t out_activation_max,
 		q7_t *output, const uint16_t output_x, const uint16_t output_y,
-		const uint16_t output_ch, q15_t *runtime_buf);
+		const uint16_t output_ch, q15_t *runtime_buf, const int32_t gap);
 
-tinyengine_status convolve_1x1_s8_ch16_fpreq(const q7_t *input,
+tinyengine_status convolve_1x1_s8_ch16_fpreq(q7_t *input,
 		const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch,
 		const q7_t *kernel, const int32_t *bias, const float *scales,
 		const int32_t out_offset, const int32_t input_offset,
 		const int32_t out_activation_min, const int32_t out_activation_max,
 		q7_t *output, const uint16_t output_x, const uint16_t output_y,
-		const uint16_t output_ch, q15_t *runtime_buf);
+		const uint16_t output_ch, q15_t *runtime_buf, const int32_t gap);
 
-tinyengine_status convolve_1x1_s8_ch24_fpreq(const q7_t *input,
+tinyengine_status convolve_1x1_s8_ch24_fpreq(q7_t *input,
 		const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch,
 		const q7_t *kernel, const int32_t *bias, const float *scales,
 		const int32_t out_offset, const int32_t input_offset,
 		const int32_t out_activation_min, const int32_t out_activation_max,
 		q7_t *output, const uint16_t output_x, const uint16_t output_y,
-		const uint16_t output_ch, q15_t *runtime_buf);
+		const uint16_t output_ch, q15_t *runtime_buf, const int32_t gap);
 
-tinyengine_status convolve_1x1_s8_ch48_fpreq(const q7_t *input,
+tinyengine_status convolve_1x1_s8_ch48_fpreq(q7_t *input,
 		const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch,
 		const q7_t *kernel, const int32_t *bias, const float *scales,
 		const int32_t out_offset, const int32_t input_offset,
 		const int32_t out_activation_min, const int32_t out_activation_max,
 		q7_t *output, const uint16_t output_x, const uint16_t output_y,
-		const uint16_t output_ch, q15_t *runtime_buf);
+		const uint16_t output_ch, q15_t *runtime_buf, const int32_t gap);
 
-tinyengine_status convolve_1x1_s8_fpreq(const q7_t *input,
+tinyengine_status convolve_1x1_s8_fpreq(q7_t *input,
 		const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch,
 		const q7_t *kernel, const int32_t *bias, const float *scales,
 		const int32_t out_offset, const int32_t input_offset,
 		const int32_t out_activation_min, const int32_t out_activation_max,
 		q7_t *output, const uint16_t output_x, const uint16_t output_y,
-		const uint16_t output_ch, q15_t *runtime_buf);
+		const uint16_t output_ch, q15_t *runtime_buf, const int32_t gap);
 
 tinyengine_status convolve_1x1_s8_fpreq_bitmask(const q7_t *input,
 		const uint16_t input_x, const uint16_t input_y, const uint16_t input_ch,
