@@ -20,23 +20,23 @@
 #include <stdlib.h>
 
 #include "RP2350.h"  // Includes the CMSIS register definitions
-#include "genNN.h"
 #include "genModelShape.h"
+#include "genNN.h"
 #include "pico/stdlib.h"
-
-#define INPUT_SIZE (160 * 160 * 3)
-#define NUM_CLASSES 1000
 
 // Define a magic anchor pattern to fill the unallocated stack space
 #define STACK_MAGIC_PATTERN 0xDEADBEEF
+#define AVERAGE_RUN         1
 
 // Pull in the linker symbols tracking where the stack boundaries sit
 extern uint32_t __StackLimit;
 
+uint32_t* start_stack_top; 
 void paint_stack(void) {
     // Get the current local address of the stack pointer right now
     volatile uint32_t* sp;
     __asm__ volatile("mov %0, sp" : "=r"(sp));
+    start_stack_top = (uint32_t*)sp;
 
     // Fill everything between the current pointer and the hard bottom limit
     uint32_t* limit = &__StackLimit;
@@ -46,8 +46,10 @@ void paint_stack(void) {
     }
 }
 
-uint32_t get_unused_stack_bytes(void) {
+uint32_t get_used_stack_bytes(void) {
     uint32_t* limit = &__StackLimit;
+    // The stack grows down, so start_stack_top is the higher address
+    uint32_t total_stack_size = (uint32_t)(start_stack_top - &__StackLimit) * sizeof(uint32_t);
     uint32_t unused_words = 0;
 
     // Count how many magic patterns are still untouched
@@ -55,7 +57,7 @@ uint32_t get_unused_stack_bytes(void) {
         unused_words++;
         limit++;
     }
-    return unused_words * sizeof(uint32_t);
+    return total_stack_size - unused_words * sizeof(uint32_t);
 }
 
 void init_cycle_counter() {
@@ -69,89 +71,62 @@ void init_cycle_counter() {
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
-uint32_t measure_code_cycles() {
-    // Snap the starting cycle count
+typedef void(*invoke_fun)(void*);
+uint32_t measure_code_cycles(invoke_fun fun) {
     uint32_t start = DWT->CYCCNT;
-
-    // ----------------------------------------
-    // INSERT YOUR PROFILING TARGET HERE
-    // ----------------------------------------
-    __asm volatile("nop");
-    __asm volatile("nop");
-    __asm volatile("nop");
-    __asm volatile("nop");
-    __asm volatile("nop");
-    for (volatile int i = 0; i < 1000; i++) {
-        __asm volatile("nop");
-        __asm volatile("nop");
-    }
-    // ----------------------------------------
-
-    // Snap the ending cycle count
-    uint32_t end = DWT->CYCCNT;
-
-    // Direct subtraction automatically accounts for 32-bit overflows
-    return (end - start);
+    fun(NULL);
+    return (DWT->CYCCNT - start);
 }
 
-int main(void) {
-    stdio_init_all();
-    // Get raw microseconds since chip boot
+uint64_t measure_code_duration(invoke_fun fun) {
+    // Snap the starting cycle count
     uint64_t start_time = time_us_64();
-    uint64_t end_time = time_us_64();
-    uint32_t array[74];
-    printf("duration = %llu microseconds\n", end_time - start_time);
-    init_cycle_counter();
-    // for (int i = 0; i < 74; i++) {
-    //     array[i] = i;
-    // }
-
-    // for (int i = 0; i < 74; i++) {
-    //     printf("array[%d] = %d\n", i, array[i]);
-    // }
-    while (!stdio_usb_connected()) {
-        sleep_ms(10);
+    for (int i=0; i < AVERAGE_RUN; i++) {
+        fun(NULL);
     }
-    start_time = time_us_64() - start_time;
-    sleep_ms(5);
-    sleep_ms(1000);
+    return (time_us_64() - start_time) / AVERAGE_RUN;
+}
 
-    for (int i = 0; i < 10; i++) {
-        printf("duration[%d] = %llu microseconds\n", i, time_us_64() - start_time);
-    }
-    printf("USB connected after %llu microseconds\n", start_time);
-
-    while (true) {
-        __asm volatile("nop");
-        __asm volatile("nop");
-        uint32_t elapsed = measure_code_cycles();
-        printf("Elapsed CPU cycles: %lu\n", elapsed);
-        sleep_ms(1000);
-    }
-
-    // Call this at the very top of main before doing heavy processing
-    paint_stack();
-
-    // while (true) {
-    //     // Run your application functions here...
-
-    //     // Print the remaining buffer space available before a crash occurs
-    //     printf("Unused stack space safety margin: %u bytes\n", get_unused_stack_bytes());
-    //     sleep_ms(2000);
-    // }
-
-    volatile int8_t* input = (int8_t*)getInput();
-    volatile int8_t* output = (int8_t*)getOutput();
-
-    srand(42);
+void load_input(int8_t* input){
     for (int i = 0; i < INPUT_SIZE; i++) {
         input[i] = (int8_t)(i % 256 - 128);
     }
+}
 
-    invoke(NULL);
+int32_t get_checksum(const int8_t* output) {
+    int32_t total = 0;
+    for (int i = 0; i < OUTPUT_SIZE; i++) {
+        total += output[i];
+    }
+    return total;
+}
 
-    for (int i = 0; i < 10; i++) {
-        printf("output[%d] = %d\n", i, output[i]);
+int main(void) {
+    init_cycle_counter();
+    stdio_init_all();
+
+    // Call this at the very top of main before doing heavy processing
+    paint_stack();
+    while (!stdio_usb_connected()) {
+        sleep_ms(10);
+    }
+    int8_t* input = (int8_t*)getInput();
+    int8_t* output = (int8_t*)getOutput();
+
+    while(true) {
+        load_input(input);
+        uint32_t cycle_count = measure_code_cycles(invoke_inf);
+        uint32_t stack_size = get_used_stack_bytes();
+        int32_t checksum = get_checksum(output);
+        load_input(input);
+        uint64_t duration_us = measure_code_duration(invoke_inf);
+
+        /* Two runs of the same work: the checksums must agree, otherwise the
+        * second inference saw different input from the first. */
+        printf("cycles       = %lu\n", (unsigned long)cycle_count);
+        printf("duration     = %llu us\n", (unsigned long long)duration_us);
+        printf("stack used = %lu bytes\n", (unsigned long)stack_size);
+        printf("checksum     = %ld\n", (long)checksum);
     }
 
     return 0;

@@ -73,7 +73,7 @@ add_executable(blink
   ${TINYENGINE_ROOT}/TinyEngine/src/kernels/fp_requantize_op/convolve_s8_kernel3_inputch3_stride2_pad1_fpreq.c
   ${TINYENGINE_ROOT}/TinyEngine/src/kernels/fp_requantize_op/mat_mul_kernels_fpreq.c
   ${TINYENGINE_ROOT}/TinyEngine/src/kernels/int_forward_op/avgpooling.c
-    )
+)
 
 
 target_include_directories(blink PRIVATE
@@ -85,7 +85,7 @@ target_include_directories(blink PRIVATE
 )
 
 
-target_link_libraries(blink pico_stdlib m)
+target_link_libraries(blink pico_stdlib m cmsis_core)
 
 pico_add_extra_outputs(blink)
 
