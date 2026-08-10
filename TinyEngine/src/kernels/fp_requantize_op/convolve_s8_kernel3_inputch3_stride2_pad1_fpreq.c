@@ -58,8 +58,8 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 		const q7_t *ip_a1 = ip_a0 + 27;
 
 		//27 for each output_ch
-		q31_t *dst1_31 = dst1;
-		q31_t *dst2_31 = dst2;
+		q31_t *dst1_31 = (q31_t *)dst1;
+		q31_t *dst2_31 = (q31_t *)dst2;
 		ip_a0 = read_and_pad(ip_a0, &dst1_31[0], &dst1_31[1]);
 		ip_a1 = read_and_pad(ip_a1, &dst2_31[0], &dst2_31[1]);
 		dst1_31 += 2;
@@ -90,8 +90,8 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 		dst1_31 += 2;
 		dst2_31 += 2;
 		//25, 26, 27
-		dst1 = dst1_31;
-		dst2 = dst2_31;
+		dst1 = (q15_t *)dst1_31;
+		dst2 = (q15_t *)dst2_31;
 		dst1[0] = *ip_a0++;
 		dst1[1] = *ip_a0++;
 		dst1[2] = *ip_a0++;
@@ -108,7 +108,6 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 			/* This part implements the im2col function */
 			const int16_t base_idx_y = (i_out_y * 2) - 1;
 			const int16_t base_idx_x = (i_out_x * 2) - 1;
-			const q15_t *col_buffer = two_column_buf;
 
 			//use variables
 			q31_t in_q7x4;
@@ -128,7 +127,7 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 			q15_t *dst3;
 
 			int input_row_offset = 3 * input_x;
-			dst = col_buffer;
+			dst = two_column_buf;
 			dst2 = dst + 9;
 			dst3 = dst2 + 9;
 			if (base_idx_y != -1) {
@@ -184,7 +183,7 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 			} else {						// first row is padded
 											//3x3 = 9 elements
 				*dst++ = pad_out;
-				q31_t *dst_31 = dst;
+				q31_t *dst_31 = (q31_t *)dst;
 				*dst_31++ = pad_out_q15x2;
 				*dst_31++ = pad_out_q15x2;
 				*dst_31++ = pad_out_q15x2;

@@ -5,7 +5,9 @@
  * Reference papers:
  *    Yet to be published
  * Contact authors:
- *  - Opegbemi Matthias Busoye, busoyeopegbemimatthias@gmail.com
+ *  - Opegbemi Matthias Busoye, matthias@powerlabstech.com
+ *  - Tolulope Matthew Busoye, matthew@powerlabstech.com
+ *  - Eghonghon-aye Eigbe, eghonghon@powerlabstech.com
  *
  * Target ISA:  ARMv7E-M
  * -------------------------------------------------------------------- */
