@@ -918,10 +918,12 @@ signed char* getOutput() {
         kernelsize = int(len(weight) / channel)
         # fuse the offset into bias
         for i in range(channel):
+            # accumulate in Python ints: the kernel sum routinely exceeds the int8 range of the weights
             tmpW = 0
             for j in range(kernelsize):
-                tmpW += weight[j * channel + i]
-            fp.write(str(self.int32_clip(bias[i] + tmpW * input_offset)) + ", ")
+                tmpW += int(weight[j * channel + i])
+            offset_bias = int(bias[i]) + tmpW * int(input_offset)
+            fp.write(str(self.int32_clip(offset_bias)) + ", ")
         fp.write("};\n")
         string = f"{const_str}int32_t offsetRBias" + str(Lindex) + "[" + str(len(bias)) + "] = {"
         fp.write(string)
@@ -929,8 +931,9 @@ signed char* getOutput() {
         for i in range(channel):
             tmpW = 0
             for j in range(kernelsize):
-                tmpW += weight[j * channel + i]
-            fp.write(str(bias[i] + tmpW * input_offset - self.int32_clip(bias[i] + tmpW * input_offset)) + ", ")
+                tmpW += int(weight[j * channel + i])
+            offset_bias = int(bias[i]) + tmpW * int(input_offset)
+            fp.write(str(offset_bias - self.int32_clip(offset_bias)) + ", ")
         fp.write("};\n")
 
         if bias_name is not None:
@@ -977,7 +980,7 @@ signed char* getOutput() {
             return -(2**31)
         elif a > 2**31 - 1:
             return 2**31 - 1
-        return a.astype(int)
+        return int(a)
 
     def _closefp(self):
         self.header_handle.close()
