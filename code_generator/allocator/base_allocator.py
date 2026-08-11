@@ -50,17 +50,13 @@ class BaseAllocator:
         name=None,
         type="activation",
         inplace=False,
-        gap=0,
-        inplace_tensor_idx=None
+        inplace_tensor_out_idx=None
     ) -> int:
         tensor_idx = len(self.rectangles)
-        if inplace:
-            assert inplace_tensor_idx is not None, \
-                f"When it is an inplace tensor, the inplace_tensor_idx must be given"
-            assert isinstance(inplace_tensor_idx, int) and inplace_tensor_idx >= 0, \
-                f"when it is an inplace_tensor, the inplace_tensor_idx must be a not negative integer"
-            assert inplace_tensor_idx < tensor_idx, \
-                f"the inplace source rectangle {inplace_tensor_idx} must be registered before tensor {tensor_idx}"
+        # Every rectangle is created plain, so we cannot know if it can be inplace except we
+        # are sure that no other tensor needs it and we do this after all tensors are created
+        assert not inplace and inplace_tensor_out_idx is None, \
+            "inplace is decided by markInplace(), after every rectangle exists"
 
         self.rectangles.append(
             {
@@ -72,18 +68,43 @@ class BaseAllocator:
                 "type": type,
                 "idx": tensor_idx,
                 "inplace": inplace,
-                "gap": gap,
-                "inplace_tensor_idx": inplace_tensor_idx,
+                "inplace_tensor_out_idx": inplace_tensor_out_idx,
                 # Memory actually touched while this tensor is live. Same as "size"
                 # for an ordinary tensor. This is to accomodate for layers that require
                 # right shift for their inplace operations like convolution.
                 "effective_size": size,
             }  # if this is set, we only need 1/4 of it after
         )
-        if inplace:
-            input_rec = self.rectangles[inplace_tensor_idx]
-            input_rec["effective_size"] = max(input_rec["effective_size"], gap + input_rec["size"], size)
         return tensor_idx
+
+    def markInplace(self, tensor_idx, out_idx, gap):
+        """
+        Record that the output rectangle `out_idx` is overwriting `tensor_idx`,
+        so the two share one address.
+
+        Called once every rectangle exists, because none of this is knowable at registration:
+        the output is always registered after the tensor it overwrites, and its size is what
+        decides how much of the buffer the pair really touches.
+        """
+        rec, out_rec = self.rectangles[tensor_idx], self.rectangles[out_idx]
+        assert isinstance(out_idx, int) and out_idx >= 0, \
+            f"the inplace output index must be a not negative integer, got {out_idx}"
+        assert out_idx > tensor_idx, \
+            f"the inplace output rectangle {out_idx} must be registered after the source tensor {tensor_idx}"
+        assert not rec["inplace"], \
+            f"rectangle {tensor_idx} is already given away to {rec['inplace_tensor_out_idx']}"
+
+        rec["inplace"] = True
+        rec["gap"] = gap
+        rec["inplace_tensor_out_idx"] = out_idx
+        # The output takes the buffer over the moment it starts being written, so
+        # the tensor it overwrites dies exactly there, so it ends when the output starts.
+        rec["end"] = out_rec["start"]
+        assert rec["start"] <= rec["end"], \
+            f"rectangle {tensor_idx} would die at {rec['end']} before it starts at {rec['start']}"
+        # Shifted input at gap..gap+size, output written from the base, so the
+        # workspace is whichever of the two reaches higher.
+        rec["effective_size"] = max(rec["size"], gap + rec["size"], out_rec["size"])
 
     def getIdxAddress(self, idx):
         target_rec = None

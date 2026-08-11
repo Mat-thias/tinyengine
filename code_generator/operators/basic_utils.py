@@ -246,12 +246,16 @@ class tensor:
         self._gap = value
 
     @property
-    def inplace_tensor(self):
-        return getattr(self, "_inplace_tensor", None)
+    def inplace_tensor_out(self):
+        return getattr(self, "_inplace_tensor_out", None)
 
-    @inplace_tensor.setter
-    def inplace_tensor(self, value: "tensor"):
-        self._inplace_tensor = value
+    @inplace_tensor_out.setter
+    def inplace_tensor_out(self, value: "tensor"):
+        assert self.inplace_tensor_out is None or self.inplace_tensor_out is value, (
+            f"tensor {self.graph_idx} is already overwritten by "
+            f"{self.inplace_tensor_out.graph_idx}; a tensor can only be given away once"
+        )
+        self._inplace_tensor_out = value
 
     @property
     def allign_memory_32(self):

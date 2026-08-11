@@ -27,33 +27,52 @@ Notation
     [s_t, e_t)          lifetime of t in layer indices, end exclusive
     z_t                 effective_size -- bytes t occupies while alive,
                         including the right-inplace workspace (Delta + input)
-    input(t)            tensor whose buffer t is computed in place over
+    in(t)               inputs t may be computed in place over
+    out(i)              the output that overwrites i
     N                   address alignment, 4 or 32 bytes
     M                   big-M slack constant, taken as the SRAM size
     x_t                 placement of t, its byte offset         (decision)
     a_t                 x_t counted in N-byte words             (decision)
     Z                   peak address touched                    (decision)
     b_uv                1 if u lies below v, else 0             (decision)
+    d_i                 1 if i is the input that gets overwritten (decision)
 
 Model
 -----
     min  Z
-    s.t. Z         >= x_t + z_t                     for all t
-         x_t        = N * a_t                       for all t
-         x_u + z_u <= x_v + M(1 - b_uv)             for overlapping u, v
-         x_v + z_v <= x_u + M b_uv                  for overlapping u, v
-         x_t        = x_input(t)                    for in-place t
+    s.t. Z            >= x_t + z_t                  for all t
+         x_t           = N * a_t                    for all t
+         x_u + z_u    <= x_v + M(1 - b_uv)          for overlapping u, v
+         x_v + z_v    <= x_u + M b_uv               for overlapping u, v
+         sum_{i in in(t)} d_i = 1                   for t with candidates
+         x_out(i) - x_i <= M(1 - d_i)               for every candidate i
+         x_i - x_out(i) <= M(1 - d_i)               for every candidate i
 
-The two big-M rows form a disjunction: whichever way b_uv is set, one row
+The two overlap rows form a disjunction: whichever way b_uv is set, one row
 binds and the other goes slack, so u lies wholly below v or wholly above it.
 An ILP cannot state "or" directly, hence the binary and the slack constant.
 
 Only pairs whose lifetimes intersect are constrained; everything else may
 share an address freely. An in-place pair is never among them -- the
-scheduler starts an in-place output's lifetime where its input's ends, so
-the two only touch, and the aliasing equality is all that ties them
-together. Were the pair also forced apart, the two constraints would
-contradict and the model would be infeasible.
+scheduler ends an in-place input's lifetime where its output's begins, so
+the two only touch. Were the pair also forced apart, that and the aliasing
+equality would contradict and the model would be infeasible.
+
+Which input an op overwrites is itself a decision. Most ops have one
+candidate, but an Add reads both operands at an index before writing that
+index, so either will do -- and the choice sets the peak, because a residual
+block that keeps its result in the freshly written buffer leaves the older
+one free and settles one slot higher than the block before it. Picking it
+here rather than by a rule means it is solved for, not guessed.
+
+The last two rows say x_out(i) = x_i, written as a pair of inequalities
+because the equality has to switch off when d_i = 0. Stating it directly as
+sum_i x_i * d_i multiplies two decisions, and an integer program is linear.
+The sum must be exactly 1, never at most 1: the touching lifetimes above are
+what keep the pair out of the disjunction, and that only holds while the two
+are pinned together. Left optional, the solver drops unaliased pairs at
+overlapping addresses that nothing then forbids, and a kernel overwrites its
+own input while still reading it.
 """
 
 import os
@@ -93,36 +112,83 @@ class MILPAllocator(BaseAllocator):
                     return True
             return False
 
-        def data_alligned_rule(model, t):
+        def data_alligned_rule(model, tensor_set):
             """x_t = N*a_t. Every tensor starts on an N-byte boundary."""
-            return model.placement[t] == model.placement_allign[t] * N
-
-        def largest_space_in_memory_rule(model, t):
+            constraint_list = list()
+            for t in tensor_set:
+                constraint_list.append(model.placement[t] == model.placement_allign[t] * N)
+            return constraint_list
+        
+        def largest_space_in_memory_rule(model, tensor_set):
             """Z >= x_t + z_t. Z is pushed to the highest address any tensor reaches."""
-            return model.largest_space_in_memory >= model.placement[t] + self.rectangles[t]["effective_size"]
+            constraint_list = list()
+            for t in tensor_set:
+                constraint_list.append(model.largest_space_in_memory >= model.placement[t] + self.rectangles[t]["effective_size"])
+            return constraint_list
 
-        def no_spatial_overlap_ascend_rule(model, t1, t2):
+        def no_spatial_overlap_rule(model, tensor_set):
             """x_u + z_u <= x_v + M(1 - b_uv). Binds when b_uv = 1: u below v."""
-            assert t1 != t2, f"A tensor cannot overlap itself, received t1 = t2 = {t1}"
-            assert can_tensors_overlap(t1, t2), f"tensors {t1} and {t2} do not overlap"
-            return model.placement[t1] + self.rectangles[t1]["effective_size"] <=  model.placement[t2] + self.SRAM * (1 - model.overlap_switch[(t1, t2)])
+            constraint_list = list()
+            # tensor_set is already the pairs that overlap in time, not the tensors.
+            for t1, t2 in tensor_set:
+                assert t1 != t2, f"A tensor cannot overlap itself, received t1 = t2 = {t1}"
+                assert can_tensors_overlap(t1, t2), f"tensors {t1} and {t2} do not overlap"
+                constraint_list.append(
+                    model.placement[t1] + self.rectangles[t1]["effective_size"] <=\
+                    model.placement[t2] + self.SRAM * (1 - model.overlap_switch[(t1, t2)])
+                )
+                constraint_list.append(
+                    model.placement[t2] + self.rectangles[t2]["effective_size"] <=\
+                    model.placement[t1] + self.SRAM * model.overlap_switch[(t1, t2)]
+                )
+            return constraint_list
 
-        def no_spatial_overlap_descend_rule(model, t1, t2):
-            """x_v + z_v <= x_u + M b_uv. Binds when b_uv = 0: v below u."""
-            assert t1 != t2, f"A tensor cannot overlap itself, received t1 = t2 = {t1}"
-            assert can_tensors_overlap(t1, t2), f"tensors {t1} and {t2} do not overlap"
-            return model.placement[t2] + self.rectangles[t2]["effective_size"] <=  model.placement[t1] + self.SRAM * model.overlap_switch[(t1, t2)]
+        def inplace_tensor_decision_rule(model, tensor_set):
+            """sum_i d_i = 1. Exactly one of the inputs of t may be overwritten by t."""
+            constraint_list = list()
+            for t in tensor_set:
+                potential_inplace_inputs = []
+                idx = self.rectangles[t]["idx"]
+                for i, rec in enumerate(self.rectangles):
+                    if rec["inplace"] and rec["inplace_tensor_out_idx"] == idx:
+                        potential_inplace_inputs.append(i)
+                assert len(potential_inplace_inputs) != 0
+                constraint_list.append(
+                    pyo.quicksum([
+                        model.decision_inplace_tensor_in[i] for i in potential_inplace_inputs
+                    ]) == 1
+                )
+            return constraint_list
 
-        def inplace_tensor_rule(model, t):
+
+        def inplace_tensor_placement_rule(model, tensor_set):
             """
             x_t = x_input(t). An in-place kernel takes its input at the base of
             a buffer and leaves its output at that same base, so the two share
             an address. Delta, the gap by which the input is shifted at run
             time, is transient workspace already carried by z_input(t), not an
             offset between the two placements.
+
+            The buffer is decided by d_i, just on of its inputs gets overwritten.
             """
-            assert self.rectangles[t]["inplace"], f"tensor {t} is not done inplace"
-            return model.placement[self.rectangles[t]["inplace_tensor_idx"]] == model.placement[t]
+            constraint_list = list()
+            for t in tensor_set:
+                potential_inplace_inputs = []
+                idx = self.rectangles[t]["idx"]
+                for i, rec in enumerate(self.rectangles):
+                    if rec["inplace"] and rec["inplace_tensor_out_idx"] == idx:
+                        potential_inplace_inputs.append(i)
+                assert len(potential_inplace_inputs) != 0
+                for i in potential_inplace_inputs:
+                    constraint_list.append(
+                        model.placement[t] - model.placement[i] <=\
+                        self.SRAM * (1 - model.decision_inplace_tensor_in[i])
+                    )
+                    constraint_list.append(
+                        model.placement[i] - model.placement[t] <=\
+                        self.SRAM * (1 - model.decision_inplace_tensor_in[i])
+                    )
+            return constraint_list
 
 
         # ==================================================================
@@ -138,8 +204,13 @@ class MILPAllocator(BaseAllocator):
             initialize=list((t1, t2) for t1, t2 in itertools.combinations(model.tensors, 2)
             if t1 != t2 and can_tensors_overlap(t1, t2))
         )
-        model.inplace_tensors = pyo.Set(
+        model.possible_inplace_tensors_in = pyo.Set(
             initialize=[t for t in model.tensors if self.rectangles[t]["inplace"]]
+        )
+        model.possible_inplace_tensors_out = pyo.Set(
+            initialize=list({
+                self.rectangles[t]["inplace_tensor_out_idx"] for t in model.tensors
+                if self.rectangles[t]["inplace_tensor_out_idx"] is not None})
         )
 
         # placement variables, word alligned
@@ -152,21 +223,19 @@ class MILPAllocator(BaseAllocator):
         # Needed for the spatial overlap if 2 tensors exist while processing a layer
         # 1 if the are arranged in ascending order else 0
         model.overlap_switch = pyo.Var(model.potential_overlap_tensors, within=pyo.Binary)
+        # 1 if this input is the one its op overwrites. An Add has two candidates
+        # and the solver picks; every other op has one and the row forces it on.
+        model.decision_inplace_tensor_in = pyo.Var(model.possible_inplace_tensors_in, within=pyo.Binary)
 
-        model.word_alligned = pyo.Constraint(model.tensors, rule=data_alligned_rule)
-        model.largest_space_in_memory_constraint = pyo.Constraint(
-            model.tensors, rule=largest_space_in_memory_rule
-        )
+        # Constraints
+        model.word_alligned_constraint = pyo.ConstraintList(rule=data_alligned_rule(model, model.tensors))
+        model.largest_space_in_memory_constraint = pyo.ConstraintList(rule=largest_space_in_memory_rule(model, model.tensors))
+        model.no_spatial_overlap_constraint = pyo.ConstraintList(rule=no_spatial_overlap_rule(model, model.potential_overlap_tensors))
+        model.inplace_tensor_decision_constraint = pyo.ConstraintList(rule=inplace_tensor_decision_rule(model, model.possible_inplace_tensors_out))
+        model.inplace_tensor_placement_constraint = pyo.ConstraintList(rule=inplace_tensor_placement_rule(model, model.possible_inplace_tensors_out))
 
         # model objective, the largest space in memory touched
         model.objective = pyo.Objective(expr=model.largest_space_in_memory, sense=pyo.minimize)
-        model.no_spatial_overlap_ascend_constraint = pyo.Constraint(
-            model.potential_overlap_tensors, rule=no_spatial_overlap_ascend_rule
-        )
-        model.no_spatial_overlap_descend_constraint = pyo.Constraint(
-            model.potential_overlap_tensors, rule=no_spatial_overlap_descend_rule
-        )
-        model.inplace_tensor = pyo.Constraint(model.inplace_tensors, rule=inplace_tensor_rule)
 
         return model
 
