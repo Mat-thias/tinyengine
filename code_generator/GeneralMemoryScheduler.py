@@ -57,8 +57,8 @@ class GeneralMemoryScheduler:
         outputTables=None,
         mem_visual_path="codegen/allocation.png",
         VisaulizeTrainable=True,
-        sort_by_lifetime=False,
-        allign_memory_32=False
+        allign_memory_32=False,
+        optimize_right_shift=True
     ):
         self.layer = layer
         self.heads = 0
@@ -76,7 +76,11 @@ class GeneralMemoryScheduler:
         self.bias = 0
         self.scale = 0
         self.code = 0
-        self.allocator = MILPAllocator(memory_limit, sort_by_lifetime, allign_memory_32)
+        self.allocator = MILPAllocator(
+            memory_limit,
+            optimize_right_shift=optimize_right_shift,
+            allign_memory_32=allign_memory_32,
+        )
         self.outputTables = outputTables
         self.USE_INPLACE = inplace
         self.mem_visual_path = mem_visual_path
@@ -324,6 +328,13 @@ class GeneralMemoryScheduler:
 
         # Allocating a memory location for each tensor/rectangle
         self.allocator.allocate()
+
+        # Only a shifted input keeps its gap; the rest have the output placed below.
+        for op in self.layer:
+            for t in op.input_tensors:
+                if t.inplace:
+                    t.gap = self.allocator.rectangles[t.allocator_idx]["gap"]
+
         # self.allocator.visualize(self.mem_visual_path)
         self._enlargeBuffer("input_output", self.allocator.get_peak())
 
@@ -345,9 +356,14 @@ class GeneralMemoryScheduler:
                 elif cnt == 1:
                     op.params["input2_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
                     op.params["input2_buf_add"] = "front"
-                elif cnt == 2:
-                    op.params["input3_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
-                    op.params["input3_buf_add"] = "front"
+                # elif cnt == 2:
+                #     op.params["input3_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
+                #     op.params["input3_buf_add"] = "front"
+                else:
+                    raise RuntimeError(
+                        f"Unexpected number of arguments {cnt} for {op}. "
+                        "We currently only support ops with at most 2 arguments."
+                    )
                 op.input_tensors[cnt].buffer_name = "buffer0"
                 op.input_tensors[cnt].buffer_address = self.allocator.getIdxAddress(t.allocator_idx)
             for cnt, t in enumerate(op.output_tensors):

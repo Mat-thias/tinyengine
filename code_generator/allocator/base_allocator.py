@@ -72,7 +72,7 @@ class BaseAllocator:
                 # Memory actually touched while this tensor is live. Same as "size"
                 # for an ordinary tensor. This is to accomodate for layers that require
                 # right shift for their inplace operations like convolution.
-                "effective_size": size,
+                "effective_size": size
             }  # if this is set, we only need 1/4 of it after
         )
         return tensor_idx
@@ -82,9 +82,8 @@ class BaseAllocator:
         Record that the output rectangle `out_idx` is overwriting `tensor_idx`,
         so the two share one address.
 
-        Called once every rectangle exists, because none of this is knowable at registration:
-        the output is always registered after the tensor it overwrites, and its size is what
-        decides how much of the buffer the pair really touches.
+        Called once every rectangle exists, because the output is always registered
+        after the tensor it overwrites, so its index is not knowable at registration.
         """
         rec, out_rec = self.rectangles[tensor_idx], self.rectangles[out_idx]
         assert isinstance(out_idx, int) and out_idx >= 0, \
@@ -102,9 +101,6 @@ class BaseAllocator:
         rec["end"] = out_rec["start"]
         assert rec["start"] <= rec["end"], \
             f"rectangle {tensor_idx} would die at {rec['end']} before it starts at {rec['start']}"
-        # Shifted input at gap..gap+size, output written from the base, so the
-        # workspace is whichever of the two reaches higher.
-        rec["effective_size"] = max(rec["size"], gap + rec["size"], out_rec["size"])
 
     def getIdxAddress(self, idx):
         target_rec = None

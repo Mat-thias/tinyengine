@@ -326,7 +326,7 @@ class Conv2d(basicOperator):
                 string += f",{str(params['input_zero_point'])}"
 
             # adding the gap for inplace convolution
-            string += f",{str(self.input_tensors[0].gap)}"
+            string += f", {str(self.input_tensors[0].gap)}"
 
             # patch-based parameters
             if "is_patch" in params and params["is_patch"] and (params["kernel_h"] > 1 or params["kernel_w"] > 1):
