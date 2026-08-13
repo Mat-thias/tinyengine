@@ -30,6 +30,7 @@ from code_generator.constant import (
     TTYPE_TRAINING_GRADIENT,
     TTYPE_TRAINING_WEIGHTS,
 )
+from ..operators.basic_utils import op_inplace_type, tensor_io
 
 
 class BaseAllocator:
@@ -46,17 +47,28 @@ class BaseAllocator:
         start,
         end,
         size,
+        tio,
         placement=-1,
         name=None,
         type="activation",
-        inplace=False,
-        inplace_tensor_out_idx=None
+        inplace=None,
+        inplace_tensor_out_idx=None,
     ) -> int:
         tensor_idx = len(self.rectangles)
         # Every rectangle is created plain, so we cannot know if it can be inplace except we
         # are sure that no other tensor needs it and we do this after all tensors are created
-        assert not inplace and inplace_tensor_out_idx is None, \
-            "inplace is decided by markInplace(), after every rectangle exists"
+        if tio != tensor_io.out_:
+            # Only input tensor (not output) can have a inplace type, the output derives their from their
+            # corresponding inputs
+            assert inplace is not None, (
+                f"inplace should be set before adding the tensor, inplace not set for tensor {tensor_idx}"
+            )
+            assert isinstance(inplace, op_inplace_type), \
+                f"inplace must be a type of op_inplace_type, got {type(inplace)} for tensor {tensor_idx}"
+        assert inplace_tensor_out_idx is None, (
+            "inplace_tensor_out_idx is decided by markPotentialInplace(), after every rectangle exists"
+            " that is when we can know its output allocated idx"
+        )
 
         self.rectangles.append(
             {
@@ -77,30 +89,51 @@ class BaseAllocator:
         )
         return tensor_idx
 
-    def markInplace(self, tensor_idx, out_idx, gap):
+    def markPotentialInplace(self, tensor):
         """
-        Record that the output rectangle `out_idx` is overwriting `tensor_idx`,
-        so the two share one address.
+        Copy a tensor's inplace type, gap and the output tensor idx that may overwrite it
+        (inplace_tensor_out_idx) onto its rectangle. Whether that output actually takes it
+        is the allocator's to decide; this only records that it may.
 
-        Called once every rectangle exists, because the output is always registered
-        after the tensor it overwrites, so its index is not knowable at registration.
+        Called once every rectangle exists, because the [output] tensor idx [that it may overwrite]
+        is created after it is registered in the allocator,so its index is not knowable at registration.
+        Tensors sharing a graph_idx map to one rectangle, so this runs more than once for it, and the
+        second pass asserts the two agree rather than overwriting.
         """
-        rec, out_rec = self.rectangles[tensor_idx], self.rectangles[out_idx]
-        assert isinstance(out_idx, int) and out_idx >= 0, \
-            f"the inplace output index must be a not negative integer, got {out_idx}"
-        assert out_idx > tensor_idx, \
-            f"the inplace output rectangle {out_idx} must be registered after the source tensor {tensor_idx}"
-        assert not rec["inplace"], \
-            f"rectangle {tensor_idx} is already given away to {rec['inplace_tensor_out_idx']}"
+        tensor_idx = tensor.allocator_idx
+        inplace = tensor.inplace
+        gap = tensor.gap
+        inplace_tensor_out_idx = None if tensor.inplace_tensor_out is None else tensor.inplace_tensor_out.allocator_idx
+        rec = self.rectangles[tensor_idx]
 
-        rec["inplace"] = True
-        rec["gap"] = gap
-        rec["inplace_tensor_out_idx"] = out_idx
-        # The output takes the buffer over the moment it starts being written, so
-        # the tensor it overwrites dies exactly there, so it ends when the output starts.
-        rec["end"] = out_rec["start"]
-        assert rec["start"] <= rec["end"], \
-            f"rectangle {tensor_idx} would die at {rec['end']} before it starts at {rec['start']}"
+        if tensor.inplace == op_inplace_type.force_not_inplace:
+            assert inplace_tensor_out_idx is None, (
+                f"if tensor is forced to not be inplace, no inplace_tensor_out_idx should be set, "
+                f"received tensor {inplace_tensor_out_idx} for {tensor.allocator_idx}"
+            )
+        else:
+            assert isinstance(inplace_tensor_out_idx, int) and inplace_tensor_out_idx >= 0, \
+                f"the inplace output index must be a not negative integer, got {inplace_tensor_out_idx}"
+            assert inplace_tensor_out_idx > tensor_idx, \
+                f"the inplace output rectangle {inplace_tensor_out_idx} must be registered after the source tensor {tensor_idx}"
+
+        if "gap" in rec:
+            # which means that the corresponding rectangle for this tensor has been assigned it inplace_tenosr_idx earlier
+            # as gap field is only set here
+            assert rec["idx"] == tensor_idx, \
+                f"for an already assigned rectangle, the idx must match, saw {tensor_idx} expected {rec['idx']}"
+            assert rec["inplace"] == inplace, \
+                f"for an already assigned rectangle, the inplace must match, but for tensor {tensor_idx} saw {inplace} expected {rec['inplace']}"
+            assert rec["gap"] == gap, \
+                f"for an already assigned rectangle, the gap must match, but for tensor {tensor_idx} saw {gap} expected {rec['gap']}"
+            assert rec["inplace_tensor_out_idx"] == inplace_tensor_out_idx, (
+                f"for an already assigned rectangle, the inplace_tensor_out_idx must match, "
+                f"but for tensor {tensor_idx} saw {inplace_tensor_out_idx} expected {rec['inplace_tensor_out_idx']}"
+            )     
+        else:
+            rec["inplace"] = inplace
+            rec["gap"] = gap
+            rec["inplace_tensor_out_idx"] = inplace_tensor_out_idx
 
     def getIdxAddress(self, idx):
         target_rec = None
@@ -116,30 +149,6 @@ class BaseAllocator:
         for cnt, rec in enumerate(tqdm(self.rectangles)):
             # fit each tensor into the memmory
             rec["placement"] = self.fit(rec)
-
-    def fit(self, rec) -> int:  # memory address
-        raise NotImplementedError
-
-    def sortSize(self):
-        sort_rectangles = []
-        while len(self.rectangles) > 0:
-            max_life = 0
-            max_size = 0
-            max_rectangle = None
-            for rec in self.rectangles:
-                if self.sort_by_lifetime:
-                    life = rec["end"] - rec["start"]
-                    if life > max_life:
-                        max_life = life
-                        max_rectangle = rec
-                else:
-                    if rec["size"] > max_size:
-                        max_size = rec["size"]
-                        max_rectangle = rec
-            assert max_rectangle is not None
-            sort_rectangles.append(max_rectangle)
-            self.rectangles.remove(max_rectangle)
-        self.rectangles = sort_rectangles
 
     def get_peak(self):
         peak = 0

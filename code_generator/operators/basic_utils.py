@@ -18,7 +18,7 @@
 
 import math
 from copy import deepcopy
-
+from enum import Enum, auto
 import numpy as np
 
 __all__ = [
@@ -181,6 +181,16 @@ sprintf(buf, \""""
 
         return ret
 
+class op_inplace_type(Enum):
+    """Specifies what an op supports as regards being inplace"""
+    force_not_inplace = 0
+    force_inplace = 1
+    flexible_inplace = 2
+
+class tensor_io(Enum):
+    """A tensors io relation to the op it interacts with either input or output"""
+    in_ = 0
+    out_ = 1
 
 class tensor:
     byte_size = {
@@ -191,7 +201,7 @@ class tensor:
         "float32": 4,
     }
 
-    def __init__(self, graph_idx, dtype, dims) -> None:
+    def __init__(self, graph_idx, dtype, dims, io=None) -> None:
         size_list = []
         for dim in dims:
             try:
@@ -210,6 +220,7 @@ class tensor:
         self.buffer_address = None
         self.allocator_idx = None
         self.graph_idx = str(graph_idx)
+        self.io = io
 
     def input_c(self):
         return self.size[0]
@@ -231,11 +242,19 @@ class tensor:
 
     @property
     def inplace(self):
-        return getattr(self, "_inplace", False)
+        return getattr(self, "_inplace", None)
 
     @inplace.setter
-    def inplace(self, value: bool):
+    def inplace(self, value: op_inplace_type):
         self._inplace = value
+
+    @property
+    def is_last_consumed(self):
+        return getattr(self, "_is_last_consumed", False)
+
+    @is_last_consumed.setter
+    def is_last_consumed(self, value: bool):
+        self._is_last_consumed = value
 
     @property
     def gap(self):

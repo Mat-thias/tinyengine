@@ -1,7 +1,7 @@
 import warnings
 
 from ..constant import USE_BIT_MASK, USE_TTE_INT8
-from .basic_utils import basicOperator, deep_copy_dicts, isweightstr, overwrite_dicts
+from .basic_utils import basicOperator, deep_copy_dicts, isweightstr, overwrite_dicts, op_inplace_type
 
 __all__ = ["Conv2d"]
 
@@ -58,6 +58,7 @@ default_params = {
     "output2_dtype": "int8",
     # for partial channel update
     "first_k_channel": None,
+    "inplace": op_inplace_type.flexible_inplace
 }
 
 

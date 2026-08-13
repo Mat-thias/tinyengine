@@ -81,3 +81,26 @@ class FirstFit(BaseAllocator):
 
         assert lowest_slot is not None, "no available slot, memory exceed MAX SRAM setting"
         return lowest_slot_starting
+
+    def sortSize(self):
+        sort_rectangles = []
+        while len(self.rectangles) > 0:
+            max_life = 0
+            max_size = 0
+            max_rectangle = None
+            for rec in self.rectangles:
+                if self.sort_by_lifetime:
+                    life = rec["end"] - rec["start"]
+                    if life > max_life:
+                        max_life = life
+                        max_rectangle = rec
+                else:
+                    if rec["size"] > max_size:
+                        max_size = rec["size"]
+                        max_rectangle = rec
+            assert max_rectangle is not None
+            sort_rectangles.append(max_rectangle)
+            self.rectangles.remove(max_rectangle)
+        self.rectangles = sort_rectangles
+
+
