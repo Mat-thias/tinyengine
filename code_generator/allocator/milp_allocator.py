@@ -35,7 +35,7 @@ Constants, off the rectangle t unless noted
     size_t      rec["size"]             bytes t holds
     gap_i       rec["gap"]              right-inplace headroom for i
     out_i       rec["inplace_tensor_out_idx"]   the output that overwrites i
-    N           local, from allign_memory_32     address alignment, 4 or 32
+    N           local, from align_to_n_bytes     address alignment, (defualt: 4)
     M           local                   address big-M, the smaller of the SRAM
                                         and every rectangle stacked end to end
     L           local                   layer big-M, the last end
@@ -171,19 +171,20 @@ class MILPAllocator(BaseAllocator):
     def __init__(
         self,
         SRAM,
+        model_name="mcunet_model",
         optimize_right_shift=True,
         optimize_inplace_flexible=True,
         RIGHT_SHIFT_COST=RIGHT_SHIFT_COST,
-        allign_memory_32=False
+        align_to_n_bytes=4
     ):
-        super().__init__(SRAM, allign_memory_32=allign_memory_32)
+        super().__init__(SRAM, model_name=model_name, align_to_n_bytes=align_to_n_bytes)
         self.optimize_right_shift = optimize_right_shift
         self.optimize_inplace_flexible = optimize_inplace_flexible
         self.RIGHT_SHIFT_COST = RIGHT_SHIFT_COST
 
     def define_model(self):
         """Build the model above over self.rectangles. See module docstring for notation."""
-        N = 32 if self.allign_memory_32 else 4
+        N = self.align_to_n_bytes
 
         # Every rectangle stacked end to end is itself a schedule, so no address can
         # be higher, and nothing may exceed the SRAM either. See the module docstring
@@ -578,7 +579,7 @@ class MILPAllocator(BaseAllocator):
         for t in model.tensors:
             rec = self.rectangles[t]
             rec["placement"] = solved_int(pyo.value(model.placement[t]))
-            if self.rectangles[t]["inplace"] is not None:
+            if self.rectangles[t]["inplace"] is not None and self.rectangles[t]["inplace"] != op_inplace_type.force_not_inplace:
                 # skip for a pure output function
                 rec["inplace_decision"] = bool(solved_int(model.decision_inplace_tensor_in[t]))
                 rec["right_shift"] = bool(solved_int(model.decision_right_shift_inplace_tensor_in[t]))

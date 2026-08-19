@@ -18,7 +18,6 @@
 
 import matplotlib
 import matplotlib.pyplot as plt
-import numpy
 from matplotlib.ticker import MaxNLocator
 from tqdm import tqdm
 
@@ -34,11 +33,12 @@ from ..operators.basic_utils import op_inplace_type, tensor_io
 
 
 class BaseAllocator:
-    def __init__(self, SRAM, sort_by_lifetime=False, allign_memory_32=False):
+    def __init__(self, SRAM, model_name="mcunet_model", sort_by_lifetime=False, align_to_n_bytes=4):
         self.rectangles = []
         self.SRAM = SRAM
+        self.model_name = model_name
         self.sort_by_lifetime = sort_by_lifetime
-        self.allign_memory_32 = allign_memory_32
+        self.align_to_n_bytes = align_to_n_bytes
     
     # Description: add a tensor to schedule, return the index of the rectangle
     # Note: placement -1 indicates no placed yet
@@ -48,6 +48,7 @@ class BaseAllocator:
         end,
         size,
         tio,
+        op,
         placement=-1,
         name=None,
         type="activation",
@@ -77,6 +78,7 @@ class BaseAllocator:
                 "size": size,
                 "placement": placement,
                 "name": name,
+                "op": op,
                 "type": type,
                 "idx": tensor_idx,
                 "inplace": inplace,
@@ -162,154 +164,110 @@ class BaseAllocator:
         return peak
 
     def visualize(self, path, train_start_idx=-1, scale=1024):
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        max_y = max_x = 0
+        fig, ax = plt.subplots(
+            figsize=(FIGURE_CONFIG["FIGURE_W_INCH"], FIGURE_CONFIG["FIGURE_H_INCH"])
+        )
+        font_size = FIGURE_CONFIG["FONT_SIZE"]
 
-        for rec in self.rectangles:
-            start, end, placement, size = (
-                rec["start"],
-                rec["end"],
-                rec["placement"],
-                rec["size"],
-            )
-            if max_y < rec["placement"] / scale + size / scale:
-                max_y = rec["placement"] / scale + size / scale
-            if max_x < end:
-                max_x = end
+        # The axes span the whole schedule: the last lifetime to end on x, and the
+        # peak (placement + effective_size, the same quantity get_peak reports) on y.
+        max_x = max(rec["end"] for rec in self.rectangles)
+        max_y = max(rec["placement"] + rec["effective_size"] for rec in self.rectangles) / scale
+        ax.set_xlim([0, max_x])
+        # A little headroom so the rectangle that sets the peak does not sit flush
+        # against the frame and become invisible.
+        y_range = max_y * 1.05
+        ax.set_ylim([0, y_range])
 
-        # x ticks
-        max_x = max_x + (10 - max_x % 10)
-        max_y = max_y + (10000 / scale - max_y % 10000 / scale)
-        # x_ticks = numpy.arange(0, max_x + 1, step=max(1, int(max_x / 10)))
-        x_ticks = numpy.arange(0, FIGURE_CONFIG["X_MAX"] + 1, step=FIGURE_CONFIG["X_STEP"])
-        plt.xticks(x_ticks, fontsize=FIGURE_CONFIG["FONT_SIZE"])
-        # y ticks
-        y_ticks = numpy.arange(0, FIGURE_CONFIG["Y_MAX"] + 1, step=FIGURE_CONFIG["Y_STEP"])
-        plt.yticks(y_ticks, fontsize=FIGURE_CONFIG["FONT_SIZE"])
-        plt.xlim([0, FIGURE_CONFIG["X_MAX"]])
-        plt.ylim([0, FIGURE_CONFIG["Y_MAX"]])
-        plt.xlabel("Life cycle (operator)")
-        plt.ylabel("Memory Footprint (KB)")
-        plt.subplots_adjust(bottom=0.15)
-        figure = plt.gcf()
-        ax.title.set_fontsize(FIGURE_CONFIG["FONT_SIZE"])
-        ax.xaxis.label.set_fontsize(FIGURE_CONFIG["FONT_SIZE"])
-        ax.yaxis.label.set_fontsize(FIGURE_CONFIG["FONT_SIZE"])
-        figure.set_size_inches(FIGURE_CONFIG["FIGURE_W_INCH"], FIGURE_CONFIG["FIGURE_H_INCH"])
+        # Height of the axes box in points, to convert a tensor's size into the
+        # units the outline width is given in. 0.72 is what the title, legend and
+        # tick labels leave of the figure once tight bounds are applied.
+        axes_height_pt = FIGURE_CONFIG["FIGURE_H_INCH"] * 72 * 0.72
+
+        # Let matplotlib choose the step. Models in the zoo run from 51 to 83 layers
+        # and from 36 KB to 300 KB, so a fixed step is either unreadably dense on one
+        # end of that range or featureless on the other.
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=12, integer=True))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=10))
+        ax.tick_params(labelsize=font_size)
+
+        ax.set_xlabel("Life cycle (operator)", fontsize=font_size)
+        ax.set_ylabel("Memory Footprint (KB)", fontsize=font_size)
+        ax.set_title(
+            f"{self.model_name} — peak {max_y:.1f} KB",
+            fontsize=font_size,
+            # Clears the legend strip, which sits between the axes and the title.
+            pad=font_size * 1.7,
+        )
         ax.set_axisbelow(True)
         ax.yaxis.grid(color="gray", linestyle="dashed")
         ax.xaxis.grid(color="gray", linestyle="dashed")
         ax.patch.set_edgecolor("black")
         ax.patch.set_linewidth(2)
 
+        # One entry per operator type actually present, in the order the network
+        # first reaches it. Rectangles go on with add_patch, which does not register
+        # a legend handle, so the swatches have to be built by hand.
+        legend_handles = {}
+        for rec in self.rectangles:
+            op_name = rec["op"].params["op"]
+            if op_name not in legend_handles:
+                legend_handles[op_name] = matplotlib.patches.Patch(
+                    facecolor=rec["op"].params["color"], edgecolor="black", label=op_name
+                )
+        ax.legend(
+            handles=list(legend_handles.values()),
+            loc="lower left",
+            bbox_to_anchor=(0, 1.005),
+            ncol=len(legend_handles),
+            frameon=False,
+            fontsize=font_size * 0.75,
+        )
+
         for cnt, rec in enumerate(self.rectangles):
-            start, end, placement, size = (
+            start, end, placement, size, color = (
                 rec["start"],
                 rec["end"],
                 rec["placement"],
-                rec["size"],
+                rec["effective_size"],
+                rec["op"].params["color"]
             )
             hatch = None
-            if rec["type"] == TTYPE_INFERNECE:
-                color = FIGURE_CONFIG["INFERENCE_COLOR"]
-            elif rec["type"] == TTYPE_TRAINING_WEIGHTS:
-                color = FIGURE_CONFIG["TRAIN_WEIGHT_COLOR"]
-            elif rec["type"] == TTYPE_TRAINING_ACTIVATION:
-                color = FIGURE_CONFIG["TRAIN_ACTIVATION_COLOR"]
-            elif rec["type"] == TTYPE_STATIC_WEIGHT:
-                color = FIGURE_CONFIG["TRAIN_TENSOR_COLOR"]
-            elif rec["type"] == TTYPE_TRAINING_GRADIENT:
-                color = FIGURE_CONFIG["TRAIN_GRADIENT_COLOR"]
-            else:
-                raise NotImplementedError
-            if rec["stride2_inplace_idx"]:
-                # Draw the first one
-                rect = matplotlib.patches.Rectangle(
-                    (start, placement / scale),
-                    rec["stride2_inplace_idx"] - start,
-                    size / scale,
-                    color=color,
-                    hatch=hatch,
+
+            # Rectangles that abut share a boundary, so the outline is what tells
+            # two neighbours apart from one block.
+            height_pt = (size / scale) / y_range * axes_height_pt
+            linewidth = min(1.6, max(0.15, height_pt / 2))
+            rect = matplotlib.patches.Rectangle(
+                (start, placement / scale),
+                end -1- start,
+                size / scale,
+                facecolor=color,
+                edgecolor="#1a1a19",
+                linewidth=linewidth,
+                hatch=hatch,
+            )
+
+            ax.add_patch(rect)
+            # Annotate index
+            if FIGURE_CONFIG["SHOW_INDEX"]:
+                cx = (start + end) / 2
+                cy = (placement / scale) + (size / scale) / 2
+                ax.annotate(
+                    str(rec["idx"]),
+                    (cx, cy),
+                    color="b",
+                    fontsize=_get_index_font_size(
+                        FIGURE_CONFIG["INDEX_FONT_SIZE"], (size / scale), FIGURE_CONFIG["Y_STEP"]
+                    ),
+                    weight="bold",
+                    ha="center",
+                    va="center",
                 )
 
-                rect.set_edgecolor("black")
-                ax.add_patch(rect)
-                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-
-                # Annotate index
-                if FIGURE_CONFIG["SHOW_INDEX"]:
-                    cx = (start + rec["stride2_inplace_idx"]) / 2
-                    cy = (placement / scale) + (size / scale) / 2
-                    ax.annotate(
-                        str(rec["idx"]),
-                        (cx, cy),
-                        color="b",
-                        fontsize=_get_index_font_size(
-                            FIGURE_CONFIG["INDEX_FONT_SIZE"], (size / scale), FIGURE_CONFIG["Y_STEP"]
-                        ),
-                        weight="bold",
-                        ha="center",
-                        va="center",
-                    )
-
-                # Draw the 1/4 one
-                rect = matplotlib.patches.Rectangle(
-                    (rec["stride2_inplace_idx"], placement / scale),
-                    end - rec["stride2_inplace_idx"],
-                    int(size / scale / 4),
-                    color=color,
-                    hatch=hatch,
-                )
-
-                rect.set_edgecolor("black")
-                ax.add_patch(rect)
-                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-
-                # Annotate index
-                if FIGURE_CONFIG["SHOW_INDEX"]:
-                    cx = (rec["stride2_inplace_idx"] + end) / 2
-                    cy = (placement / scale) + (size / scale / 4) / 2
-                    ax.annotate(
-                        str(rec["idx"]),
-                        (cx, cy),
-                        color="b",
-                        fontsize=_get_index_font_size(
-                            FIGURE_CONFIG["INDEX_FONT_SIZE"], (size / scale), FIGURE_CONFIG["Y_STEP"]
-                        ),
-                        weight="bold",
-                        ha="center",
-                        va="center",
-                    )
-            else:
-                rect = matplotlib.patches.Rectangle(
-                    (start, placement / scale),
-                    end - start,
-                    size / scale,
-                    color=color,
-                    hatch=hatch,
-                )
-
-                rect.set_edgecolor("black")
-                ax.add_patch(rect)
-                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-                # Annotate index
-                if FIGURE_CONFIG["SHOW_INDEX"]:
-                    cx = (start + end) / 2
-                    cy = (placement / scale) + (size / scale) / 2
-                    ax.annotate(
-                        str(rec["idx"]),
-                        (cx, cy),
-                        color="b",
-                        fontsize=_get_index_font_size(
-                            FIGURE_CONFIG["INDEX_FONT_SIZE"], (size / scale), FIGURE_CONFIG["Y_STEP"]
-                        ),
-                        weight="bold",
-                        ha="center",
-                        va="center",
-                    )
-
-        plt.savefig(path, dpi=FIGURE_CONFIG["DPI"])
+        # tight: the legend and title live outside the axes and would be cropped.
+        fig.savefig(path, dpi=FIGURE_CONFIG["DPI"], bbox_inches="tight")
+        plt.close(fig)
 
 
 def _get_index_font_size(origin_font_size, y_size, y_block_size):

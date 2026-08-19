@@ -19,7 +19,7 @@
 from collections import defaultdict
 from .allocator.milp_allocator import MILPAllocator
 
-from .operators.basic_utils import allign_byte_to_n
+from .operators.basic_utils import align_byte_to_n
 from .constant import (
     FUSE_SGD_UPDATE_STR,
     FUSHION_CONFIG,
@@ -59,10 +59,12 @@ class GeneralMemoryScheduler:
         outputTables=None,
         mem_visual_path="codegen/allocation.png",
         VisaulizeTrainable=True,
-        allign_memory_32=False,
         optimize_right_shift=True,
         optimize_inplace_flexible=True,
-        right_shift_cost = 1e-4
+        disable_inplace_option = False,
+        right_shift_cost = 1e-4,
+        align_to_n_bytes=4,
+        model_name="mcunet_model"
     ):
         self.layer = layer
         self.heads = 0
@@ -82,18 +84,20 @@ class GeneralMemoryScheduler:
         self.code = 0
         self.allocator = MILPAllocator(
             memory_limit,
+            model_name=model_name,
             optimize_right_shift=optimize_right_shift,
             optimize_inplace_flexible = optimize_inplace_flexible,
             RIGHT_SHIFT_COST=right_shift_cost,
-            allign_memory_32=allign_memory_32
+            align_to_n_bytes=align_to_n_bytes
         )
+        self.disable_inplace_option = disable_inplace_option
         self.outputTables = outputTables
         self.USE_INPLACE = inplace
         self.mem_visual_path = mem_visual_path
         self.tflite_op = tflite_op
         self.dummy_address = dummy_address
         self.VisaulizeTrainable = VisaulizeTrainable
-        self.allign_memory_32 = allign_memory_32
+        self.align_to_n_bytes=align_to_n_bytes
 
         # for showing layer-wise memory usage
         self.layermem = []
@@ -159,9 +163,14 @@ class GeneralMemoryScheduler:
                         return False
             return True
 
-        def tensor_inplace_parameters_in(t, inplace, gap, t_outs):
+        def tensor_inplace_parameters_in(t, op, gap=0):
             """
-            set the 3 parameters needed by input tensorfor inplace operations and memory scheduling
+            set the 3 parameters:
+                - its inplace type
+                - its gap
+                - its outputs which can `potentially` overwrite, an output can have multiple inputs
+                  like add so only one is choosen to be overwritten
+            needed by input tensor for inplace operations and memory scheduling
 
             A tensor another layer still reads cannot be overwritten, so it gets no
             gap either. Codegen emits this straight into the kernel call, and the
@@ -169,15 +178,32 @@ class GeneralMemoryScheduler:
             input and output, so a gap left on a tensor that was never going to be
             aliased is a memmove waiting for the addresses to line up.
             """
-            t.inplace = inplace
-            t.gap = 0 if inplace == op_inplace_type.force_not_inplace else\
-                    allign_byte_to_n(gap, (32 if self.allign_memory_32 else 4))
-            t.inplace_tensor_out = None if inplace == op_inplace_type.force_not_inplace else t_outs[0]
+            if t.is_last_consumed and not self.disable_inplace_option:
+                inplace = op.params["inplace"]
+            else: inplace = op_inplace_type.force_not_inplace
 
+            # only a flexible_inplace tensors can be modified, if an op has special requirements like
+            # depthwise conv, which has to be inplace, it sets it before here
+            if t.inplace is None or t.inplace == op_inplace_type.flexible_inplace:
+                t.inplace = inplace
+
+            # aligning the memory so the memmove operation is not fragmented which speeds it up
+            t.gap = 0 if t.inplace == op_inplace_type.force_not_inplace else \
+                    align_byte_to_n(gap, self.align_to_n_bytes)
+            assert len(op.output_tensors) == 1, (
+                "the current implementation only support single output operations but received "
+                f"{op.__class__.__name__} with {len(op.output_tensors)}"
+            )
+            t.inplace_tensor_out = None if t.inplace == op_inplace_type.force_not_inplace else op.output_tensors[0]
 
         # Classify each op's inputs inplace type conditioned on if it is the last consumers of the tensor,
         # hence it can be overwritten. The op declares what its kernel can do through params["inplace"],
         # but a tensor a later layer still reads cannot be given away regardless of what the kernel supports.
+
+        # NOTE: This also acts as the switch to turn off the inplace operation for all tensors and exclude
+        # those with a default force inplace operation like depthwise covn, this can also be used to all
+        # tensor fully dual-buffer that will need all kernel to support that
+
         for i, op in enumerate(self.layer):
             if isinstance(op, INPLACE_OPS_INPUT_GROUPING[1]):
                 t = op.input_tensors[0]
@@ -196,28 +222,23 @@ class GeneralMemoryScheduler:
                         p_h=params['padding_h'], p_w=params['padding_w']
                     )
                     # if it is not the last consumed, it must be preserved, hence not in place
-                    if t.is_last_consumed: inplace = op.params["inplace"]
-                    else: inplace = op_inplace_type.force_not_inplace
-                elif isinstance(op, (avgpool2d.AvgPool2d, depthwiseConv2d.DepthwiseConv2d)):
-                    if t.is_last_consumed: inplace = op.params["inplace"]
-                    else: inplace = op_inplace_type.force_not_inplace
-                # alligning the memory so the memmove operation is not fragmented which speeds it up
-                tensor_inplace_parameters_in(t, inplace, gap, op.output_tensors)
+                elif isinstance(op, depthwiseConv2d.DepthwiseConv2d):
+                    assert t.is_last_consumed, (
+                        f"only the inplace variant of {op.__class__.__name__} has been implemented but "
+                        f"its input tensor {t.graph_idx} is still needed by a future layer, so inplace "
+                        "is not possible"
+                    )
+                    t.inplace = op.params["inplace"]
+
+                tensor_inplace_parameters_in(t, op, gap)
 
             elif isinstance(op, INPLACE_OPS_INPUT_GROUPING[2]):
                 t1, t2 = op.input_tensors
+                gap1 = gap2 = 0
                 t1.is_last_consumed = is_layer_last_consumer_of_tensor(i, t1)
                 t2.is_last_consumed = is_layer_last_consumer_of_tensor(i, t2)
-                inplace1 = inplace2 = op_inplace_type.force_not_inplace
-                gap1 = gap2 = 0
-                if isinstance(op, add.Add):
-                    if t1.is_last_consumed: inplace1 = op.params["inplace"]
-                    else: inplace1 = op_inplace_type.force_not_inplace
-                    if t2.is_last_consumed: inplace2 = op.params["inplace"]
-                    else: inplace2 = op_inplace_type.force_not_inplace
-                # alligning the memory so the memmove operation is not fragmented which speeds it up
-                tensor_inplace_parameters_in(t1, inplace1, gap1, op.output_tensors)
-                tensor_inplace_parameters_in(t2, inplace2, gap2, op.output_tensors)
+                tensor_inplace_parameters_in(t1, op, gap1)
+                tensor_inplace_parameters_in(t2, op, gap2)
 
             else:
                 raise AttributeError(f"Unaccounted Layerr {op} {op.params['op']}")
@@ -242,7 +263,7 @@ class GeneralMemoryScheduler:
             assert training_start_idx == len(self.layer), \
                 f"The current implementation does not support traning yet, this is a guide for that"
             for cnt, (t, tio) in enumerate(unallocated_tensors):
-                t.allign_memory_32 = self.allign_memory_32
+                t.align_to_n_bytes = self.align_to_n_bytes
                 start_idx = i
                 # TODO: this is temp solution
                 if training_start_idx > i and "out_multiply" not in t.graph_idx:
@@ -276,7 +297,8 @@ class GeneralMemoryScheduler:
                         start_idx = 0
                 # add the tensor
                 graph_idx_allocated_idx[t.graph_idx] = self.allocator.addTensor(
-                    start_idx, end_idx, t.len(), name=t.graph_idx, type=ttype, inplace=t.inplace, tio=tio
+                    start_idx, end_idx, t.len(), op=op, name=t.graph_idx,
+                    type=ttype, inplace=t.inplace, tio=tio
                 )
 
             # for detailed memory
@@ -342,15 +364,28 @@ class GeneralMemoryScheduler:
                         r["type"] = TTYPE_TRAINING_WEIGHTS
 
         # propagate the allocation to tensors with the same graph_idx
+        # the last consumed tensor (basically, the time this tensor is the input to a layer, its value has to be preserved till then)
+        # with the same idx overwrites the others, and rejects:
+        #       - an intermidate tensor which is forced inplace, but an later consumer input, which is not inplace as the changes the address
+        #         that the later layer will read from
+        #       - an intermidate tensor which is flexible inplace by a force not inplace, the same reason as the offer
         assert len(graph_idx_register) == len(graph_idx_allocated_idx), f"graph tree malformed"
         for (graph_idx, tensors), (graph_idx_, allocated_idx) in zip(graph_idx_register.items(), graph_idx_allocated_idx.items()):
             assert graph_idx == graph_idx_, f"graph tree malformed"
-            try: last_consumed_t = [t for t in tensors if t.is_last_consumed][0]
+
+            last_consumed_t = [t for t in tensors if t.is_last_consumed]
+            assert len(last_consumed_t) <= 1, "Only one tensor should be the last, graph malformed"
+            try: last_consumed_t = last_consumed_t[0]
             except IndexError: last_consumed_t = None
             for t in tensors:
                 t.allocator_idx = allocated_idx
                 if last_consumed_t is not None:
-                    t.inplace = last_consumed_t.inplace
+                    # the rejection assignment is an extra sanity check, to assure no graph order corruption
+                    t.force_change_inplace(last_consumed_t.inplace, reject=(
+                        # dst, src
+                        (op_inplace_type.force_inplace, None),
+                        (op_inplace_type.flexible_inplace, op_inplace_type.force_not_inplace)
+                    ))
                     t.gap = last_consumed_t.gap
                     t.inplace_tensor_out = last_consumed_t.inplace_tensor_out
 
@@ -369,9 +404,12 @@ class GeneralMemoryScheduler:
         for op in self.layer:
             for t in op.input_tensors:
                 rec = self.allocator.rectangles[t.allocator_idx]
-                t.gap = rec["gap"] if rec["right_shift"] else 0
+                if rec["inplace"] is not None and rec["inplace"] != \
+                    op_inplace_type.force_not_inplace and rec["right_shift"]:
+                    t.gap = rec["gap"]
+                else: t.gap = 0
 
-        # self.allocator.visualize(self.mem_visual_path)
+        self.allocator.visualize(self.mem_visual_path)
         self._enlargeBuffer("input_output", self.allocator.get_peak())
 
         # sanity check, see if all tensors have been allocated

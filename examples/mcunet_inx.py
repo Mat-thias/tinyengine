@@ -13,15 +13,20 @@
 # ----------------------------------------------------------------------
 
 """
-Codegen entry point for the MCUNet-inX image classifiers
+Codegen entry point for the models in the MCUNet zoo
 ============================================================
 
-Generates the C source for one of mcunet-in0 .. mcunet-in4 and reports the
-peak activation memory the schedule needs.
+Generates the C source for one released model and reports the peak activation
+memory the schedule needs.
 
 Usage
 -----
-    python examples/mcunet_inx.py -x 4
+    python examples/mcunet_inx.py -x 4              # mcunet-in4
+    python examples/mcunet_inx.py -n mcunet-vww1    # any other zoo model
+
+-x is shorthand for the mcunet-inX classifiers, which is what the sweep in
+mcunet_comparison_results.py reaches for most often; -n takes any id in
+net_id_list, so the vww, mbv2 and proxyless releases go through the same path.
 
 Run from the repository root: the paths below are relative to the working
 directory, not to this file.
@@ -50,23 +55,40 @@ sys.path.insert(0, "..")
 import argparse
 
 from code_generator.CodegenUtilTFlite import GenerateSourceFilesFromTFlite
-from mcunet.mcunet.model_zoo import download_tflite
+from mcunet.mcunet.model_zoo import download_tflite, net_id_list
 
 parser = argparse.ArgumentParser("mcunet")
-parser.add_argument(
-    "-x", type=int, required=True, choices=list(range(0, 5)),
+group = parser.add_mutually_exclusive_group(required=True)
+group.add_argument(
+    "-x", type=int, choices=list(range(0, 5)),
     help="specifies the mcunet_inx model to work with"
+)
+group.add_argument(
+    "-n", "--net-id", choices=net_id_list,
+    help="any model in the zoo, for the releases -x cannot name"
+)
+parser.add_argument(
+    "-f", "--life_cycle_file", type=str, default="./lifecycle.png",
+    help="the location to save the tensor lifecycle visualization"
+)
+parser.add_argument(
+    "-d", "--disable_inplace_option", default=False, action="store_true",
+    help="to return to dual buffer execution"
 )
 args = parser.parse_args()
 
+net_id = args.net_id or f"mcunet-in{args.x}"
+
 # Fetched once and cached by the model zoo; later runs are offline.
-tflite_path = download_tflite(net_id=f"mcunet-in{args.x}")
+tflite_path = download_tflite(net_id=net_id)
 
 # Parses the tflite, schedules the activations (MILP), and emits the C source.
 # life_cycle_path is the allocation figure, not a model artefact.
-peakmem = GenerateSourceFilesFromTFlite(
+peakmem, _ = GenerateSourceFilesFromTFlite(
     tflite_path,
-    life_cycle_path="./lifecycle.png",
+    model_name=net_id,
+    life_cycle_path=args.life_cycle_file,
+    disable_inplace_option = args.disable_inplace_option
 )
 
 # Peak activation memory only: the weights live in flash and are not counted.

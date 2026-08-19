@@ -238,7 +238,7 @@ class tensor:
         self.size = (self.size[0], self.size[1], h)
 
     def len(self):
-        return allign_byte_to_n(np.prod(self.size) * self.byte_size[self.dtype], (32 if self.allign_memory_32 else 4))
+        return align_byte_to_n(np.prod(self.size) * self.byte_size[self.dtype], self.align_to_n_bytes)
 
     @property
     def inplace(self):
@@ -246,7 +246,46 @@ class tensor:
 
     @inplace.setter
     def inplace(self, value: op_inplace_type):
+        # when a tensor is set to a forced inplace type (force_inplace or force_not_inplace)
+        # one should be careful not to change it
+        if self.inplace is not None:
+            if self.inplace == value: return
+            if self._inplace != op_inplace_type.flexible_inplace:
+                raise ValueError(
+                    f"Cannot overwrite a tensor inplace which is of {op_inplace_type.force_inplace.name} or "
+                    f"{op_inplace_type.force_inplace.name}, as they are forced, used "
+                    f"{self.force_change_inplace.__name__}, if you want to force this change."
+                )
         self._inplace = value
+
+
+    def force_change_inplace(self, value: op_inplace_type, reject=None):
+        """
+        Force tensor's inplace type change, it allows for rejection to be safe
+        reject: iterable((dst, src)) gives a filter of not allowed assignment option,
+                None is seen as all in src, put it is not a valid value for dst
+
+        When reject is not set, no assignment check is made 
+        """
+        if self.inplace is None:
+            self._inplace = value
+            return
+        if reject is None or self.inplace == value:
+            self._inplace = value
+        else:
+            assignment_rejected = False
+            for dst, src in reject:
+                assert dst is not None, "dst cannot be None in reject"
+                if self.inplace == dst and (src is None or src == value):
+                    assignment_rejected = True
+                    break
+            if assignment_rejected:
+                raise ValueError(
+                    f"tensor inplace assignment rejected, dst={self.inplace}, source={value}, "
+                    f"in rejection {reject}"
+                )
+            self._inplace = value
+
 
     @property
     def is_last_consumed(self):
@@ -277,12 +316,12 @@ class tensor:
         self._inplace_tensor_out = value
 
     @property
-    def allign_memory_32(self):
-        return getattr(self, "_allign_memory_32", False)
+    def align_to_n_bytes(self):
+        return getattr(self, "_align_to_n_bytes", 4)
 
-    @allign_memory_32.setter
-    def allign_memory_32(self, value: bool):
-        self._allign_memory_32 = value
+    @align_to_n_bytes.setter
+    def align_to_n_bytes(self, value: int):
+        self._align_to_n_bytes = value
 
 
 def overwrite_dicts(src, dst):
@@ -293,7 +332,7 @@ def overwrite_dicts(src, dst):
             pass
             # warnings.warn(f"given key:{k} is not used in src dict")
 
-def allign_byte_to_n(byte_cnt, n=None):
+def align_byte_to_n(byte_cnt, n=None):
     n = n or 4
     return math.ceil(byte_cnt / n) * n
 

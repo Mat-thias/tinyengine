@@ -58,7 +58,8 @@ default_params = {
     "output2_dtype": "int8",
     # for partial channel update
     "first_k_channel": None,
-    "inplace": op_inplace_type.flexible_inplace
+    "inplace": op_inplace_type.flexible_inplace,
+    "color": "#38b6ff" # turocoious blue
 }
 
 

@@ -47,7 +47,8 @@ default_params = {
     "kernel_w": None,
     "input_dtype": "int8",
     "output_dtype": "int8",
-    "inplace": op_inplace_type.flexible_inplace
+    "inplace": op_inplace_type.flexible_inplace,
+    "color": "#cd6ce6" # purple
 }
 
 
