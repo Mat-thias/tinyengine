@@ -20,15 +20,15 @@ import os
 from tempfile import TemporaryDirectory
 
 from .CodeGenerator import CodeGenerator
-from .GeneralMemoryScheduler import GeneralMemoryScheduler
+from .GeneralMemoryScheduler import GeneralMemoryScheduler, InplaceMode
 from .TfliteConvertor import TfliteConvertor
 
 
 def GenerateSourceFilesFromTFlite(
     tflite_path,
+    inplace_mode=InplaceMode.full,
     optimize_right_shift=True,
     optimize_inplace_flexible=True,
-    disable_inplace_option = False,
     right_shift_cost = 1e-4,
     model_name="mcunet_model",
     life_cycle_path=None
@@ -55,9 +55,9 @@ def GenerateSourceFilesFromTFlite(
             mem_visual_path=schedule_image_path,
             VisaulizeTrainable=VisaulizeTrainable,
             model_name=model_name,
+            inplace_mode=inplace_mode,
             optimize_right_shift=optimize_right_shift,
             optimize_inplace_flexible=optimize_inplace_flexible,
-            disable_inplace_option = disable_inplace_option,
             right_shift_cost = right_shift_cost,
         )
         memory_scheduler.USE_INPLACE = use_inplace
@@ -79,4 +79,7 @@ def GenerateSourceFilesFromTFlite(
         # set detection outputs before codegen if any
         code_generator.codeGeneration()
 
-        return memory_scheduler.buffers["input_output"], memory_scheduler.allocator.rectangles
+        return (
+            memory_scheduler.buffers,
+            memory_scheduler.allocator.rectangles,
+        )

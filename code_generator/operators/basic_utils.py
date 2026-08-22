@@ -181,6 +181,28 @@ sprintf(buf, \""""
 
         return ret
 
+
+class InplaceMode(Enum):
+    """
+    To select different inplace modes:
+
+    dual_buffer: the naive mode output and input are stored in different
+                 memory.
+    depthwise_only: the tinyengine inplace mode, which only depthwise convolutions
+                    are done inplace
+    full: all operations that can be done inplace are optimized for inplace.
+          The current implemented operations that can be optimized for being
+          inplace are:
+            - Conv
+            - Depthwise conv
+            - Add
+            - Average
+    """
+    dual_buffer = "dual_buffer"
+    depthwise_only = "depthwise_only"
+    full = "full"
+
+
 class op_inplace_type(Enum):
     """Specifies what an op supports as regards being inplace"""
     force_not_inplace = 0

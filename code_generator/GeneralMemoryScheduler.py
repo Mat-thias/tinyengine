@@ -16,8 +16,14 @@
 # Target ISA:  ARMv7E-M
 # ----------------------------------------------------------------------
 
+import sys
+from enum import Enum
 from collections import defaultdict
 from .allocator.milp_allocator import MILPAllocator
+
+# root to the right_inplace to load the gap formular
+sys.path.insert(0, "..")
+from right_inplace import right_inplace_gap_dense_ext
 
 from .operators.basic_utils import align_byte_to_n
 from .constant import (
@@ -32,8 +38,7 @@ from .constant import (
 )
 
 from .operators import add, avgpool2d, conv2d, depthwiseConv2d
-from .operators.right_inplace import right_inplace_gap_unpadded_ext
-from .operators.basic_utils import op_inplace_type, tensor_io
+from .operators.basic_utils import op_inplace_type, tensor_io, InplaceMode
 
 # NOTE: Currently only supports ops a single output
 INPLACE_OPS_INPUT_GROUPING = {
@@ -59,9 +64,9 @@ class GeneralMemoryScheduler:
         outputTables=None,
         mem_visual_path="codegen/allocation.png",
         VisaulizeTrainable=True,
+        inplace_mode=InplaceMode.full,
         optimize_right_shift=True,
         optimize_inplace_flexible=True,
-        disable_inplace_option = False,
         right_shift_cost = 1e-4,
         align_to_n_bytes=4,
         model_name="mcunet_model"
@@ -90,7 +95,7 @@ class GeneralMemoryScheduler:
             RIGHT_SHIFT_COST=right_shift_cost,
             align_to_n_bytes=align_to_n_bytes
         )
-        self.disable_inplace_option = disable_inplace_option
+        self.inplace_mode = inplace_mode
         self.outputTables = outputTables
         self.USE_INPLACE = inplace
         self.mem_visual_path = mem_visual_path
@@ -178,7 +183,7 @@ class GeneralMemoryScheduler:
             input and output, so a gap left on a tensor that was never going to be
             aliased is a memmove waiting for the addresses to line up.
             """
-            if t.is_last_consumed and not self.disable_inplace_option:
+            if t.is_last_consumed and self.inplace_mode == InplaceMode.full:
                 inplace = op.params["inplace"]
             else: inplace = op_inplace_type.force_not_inplace
 
@@ -213,13 +218,15 @@ class GeneralMemoryScheduler:
                     # adding gap to the output tensor only for conv2d,
                     # to cater for the inplace convolution head room
                     params = op.params
-                    gap = right_inplace_gap_unpadded_ext(
-                        cin=params['input_c'], cout=params['output_c'],
-                        k_h=params['kernel_h'], k_w=params['kernel_w'],
-                        hin=params['input_h'], win=params['input_w'],
-                        s_h=params['stride_h'], s_w=params['stride_w'],
-                        d_h=params['dilation_h'], d_w=params['dilation_w'],
-                        p_h=params['padding_h'], p_w=params['padding_w']
+                    # dilation is not set in the current implementation
+                    gap = right_inplace_gap_dense_ext(
+                        cin=params["input_c"], cout=params["output_c"],
+                        k_h=params["kernel_h"], k_w=params["kernel_w"],
+                        hin=params["input_h"], win=params["input_w"],
+                        s_h=params["stride_h"], s_w=params["stride_w"],
+                        d_h=1, d_w=1,
+                        p_h=params["padding"], p_w=params["padding"],
+                        load_input_receptive_field=True
                     )
                     # if it is not the last consumed, it must be preserved, hence not in place
                 elif isinstance(op, depthwiseConv2d.DepthwiseConv2d):
@@ -228,7 +235,9 @@ class GeneralMemoryScheduler:
                         f"its input tensor {t.graph_idx} is still needed by a future layer, so inplace "
                         "is not possible"
                     )
-                    t.inplace = op.params["inplace"]
+                    # For a naive/dual-buffer comparison schedule only
+                    if self.inplace_mode == InplaceMode.depthwise_only:
+                        t.inplace = op.params["inplace"]
 
                 tensor_inplace_parameters_in(t, op, gap)
 

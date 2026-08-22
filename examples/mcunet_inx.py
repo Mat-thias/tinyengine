@@ -54,7 +54,7 @@ sys.path.insert(0, "..")
 
 import argparse
 
-from code_generator.CodegenUtilTFlite import GenerateSourceFilesFromTFlite
+from code_generator.CodegenUtilTFlite import GenerateSourceFilesFromTFlite, InplaceMode
 from mcunet.mcunet.model_zoo import download_tflite, net_id_list
 
 parser = argparse.ArgumentParser("mcunet")
@@ -72,9 +72,10 @@ parser.add_argument(
     help="the location to save the tensor lifecycle visualization"
 )
 parser.add_argument(
-    "-d", "--disable_inplace_option", default=False, action="store_true",
-    help="to return to dual buffer execution"
+    "-m", "--inplace_mode", default="full", choices=[mode.name for mode in InplaceMode],
+    help="selects the inplace mode",
 )
+
 args = parser.parse_args()
 
 net_id = args.net_id or f"mcunet-in{args.x}"
@@ -84,12 +85,13 @@ tflite_path = download_tflite(net_id=net_id)
 
 # Parses the tflite, schedules the activations (MILP), and emits the C source.
 # life_cycle_path is the allocation figure, not a model artefact.
-peakmem, _ = GenerateSourceFilesFromTFlite(
+buffers, _ = GenerateSourceFilesFromTFlite(
     tflite_path,
     model_name=net_id,
     life_cycle_path=args.life_cycle_file,
-    disable_inplace_option = args.disable_inplace_option
+    inplace_mode=InplaceMode(args.inplace_mode)
 )
+peakmem = buffers["input_output"]
 
 # Peak activation memory only: the weights live in flash and are not counted.
 print(f"Peak memory: {peakmem} bytes")
