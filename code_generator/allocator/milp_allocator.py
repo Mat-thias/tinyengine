@@ -35,6 +35,9 @@ Constants, off the rectangle t unless noted
     size_t      rec["size"]             bytes t holds
     gap_i       rec["gap"]              right-inplace headroom for i
     out_i       rec["inplace_tensor_out_idx"]   the output that overwrites i
+    shift_i     rec["op_needs_right_shift"]     whether i's op needs its output
+                                        below its input (conv) or shares the
+                                        base with it (add, depthwise, upsample)
     N           local, from align_to_n_bytes     address alignment, (defualt: 4)
     M           local                   address big-M, the smaller of the SRAM
                                         and every rectangle stacked end to end
@@ -61,7 +64,8 @@ Model, each row against the rule that builds it
     Z    >= x_t + z_t                        largest_space_in_memory_rule
     x_t   = N a_t                            data_alligned_rule
     z_t   = size_t                           effective_size_rule, t not a candidate
-    z_i  >= size_i + gap_i r_i               effective_size_rule, candidate i
+    z_i  >= size_i + gap_i r_i               effective_size_rule, candidate i, shift_i
+    z_i  >= size_i + gap_i d_i               effective_size_rule, candidate i, not shift_i
     e_t   = end_t                            tensor_end_rule, t not a candidate
     e_i   = start_out_i d_i + end_i (1 - d_i)      tensor_end_rule, candidate i
     e_t1 - start_t2 <= L p_t1t2              no_temporal_overlap_rule
@@ -70,8 +74,11 @@ Model, each row against the rule that builds it
     x_t2 + z_t2 <= x_t1 + M q_t1t2 + M b_t1t2              no_spatial_overlap_rule
     sum_{i overwritten by o} d_i <= 1        inplace_tensor_decision_rule
     r_i  <= d_i                              inplace_tensor_right_shift_rule
-    x_out_i - (x_i - gap_i(1 - r_i)) <= M(1 - d_i)     inplace_tensor_placement_rule
-    (x_i - gap_i(1 - r_i)) - x_out_i <= M(1 - d_i)     inplace_tensor_placement_rule
+    |x_out_i - xstart_i| <= M(1 - d_i)       inplace_tensor_placement_rule, as a
+                                             big-M pair, where xstart_i is the
+                                             address the output must start at:
+        xstart_i = x_i - gap_i(1 - r_i)          shift_i, output below the input
+        xstart_i = x_i                           not shift_i, output shares the base
 
 tensor_overlap_fix_rule pins p, q and b on the pairs whose answer is already
 known. A candidate's end is one of two layers rather than an unknown, so a pair
@@ -123,22 +130,32 @@ declined pair keeps the input alive through the layer, p_t1t2 sees the two
 overlapping, and no_spatial_overlap_rule holds them apart. With a fixed lifetime
 the same freedom would let a kernel overwrite its own input while still reading it.
 
-How the pair is separated is the second decision. The output must start gap_i
-below where the input is read from, and there are two ways to arrange that:
-memmove the input up by gap_i and write the output from x_i (r_i = 1), or leave
-the input alone and start the output at x_i - gap_i (r_i = 0). Both give the
-kernel the same geometry -- and it needs no telling which, since it shifts only
-when handed one pointer for both. The first costs a copy, the second costs the
-freedom to place the output. So r_i is priced into the objective at C per byte
-moved, and the solver pays for a memmove only where placing the output low would
-cost more peak than the copy is worth.
+How the pair is separated is the second decision, and only some ops have it.
+shift_i says which. A convolution must start its output gap_i below where the
+input is read from, and there are two ways to arrange that: memmove the input up
+by gap_i and write the output from x_i (r_i = 1), or leave the input alone and
+start the output at x_i - gap_i (r_i = 0). Both give the kernel the same
+geometry. The first costs a copy, the second costs the freedom to place the
+output, so r_i is priced into the objective at C per byte moved and the solver
+pays for a memmove only where placing the output low would cost more peak than
+the copy is worth. The kernel is told which it got, as the right_shift argument
+beside gap_i, and shifts only under that flag.
 
-z_i carries gap_i only when r_i does, since an unshifted input occupies just its
-own bytes; r_i <= d_i keeps a candidate that is not the one being overwritten
-from claiming either. Both rows would be products of two decisions written the
-obvious way -- x_i d_i to select an address, gap_i d_i r_i to size the workspace
--- so each is a big-M pair or an implication instead. An integer program is
-linear.
+The rest -- add, depthwise, upsample -- have no such choice: the output shares
+the base, x_out_i = x_i, and r_i does not appear in their placement row at all.
+An upsample still carries a gap_i, since its output is larger than its input and
+the workspace runs that much past it, but the whole of it sits above x_i rather
+than below.
+
+That difference is what splits z_i in two. Where the output goes below, the input
+reaches gap_i past its own bytes only when it is the input that moved, so z_i
+follows r_i. Where the output shares the base, the workspace is above the input
+whenever the aliasing happens, so z_i follows d_i instead. Both collapse to
+size_i when the candidate is not the one overwritten: r_i <= d_i carries that for
+the first, d_i is written out in the second, which has no r_i to imply it. Every
+one of these rows would otherwise be a product of two decisions -- x_i d_i to
+select an address, gap_i d_i r_i to size the workspace -- so each is a big-M pair
+or an implication instead. An integer program is linear.
 
 Both freedoms can be taken away, to measure what they are worth or to fall back
 on the older behaviour. optimize_right_shift=False adds
@@ -414,13 +431,20 @@ class MILPAllocator(BaseAllocator):
             sum_i r_i = 1, per output. With r_i <= d_i and sum_i d_i = 1 this pins
             r to d, so the chosen input is shifted and no output is placed low.
             """
-            return [
-                pyo.quicksum([
-                    model.decision_right_shift_inplace_tensor_in[i]
-                    for i in potential_inplace_inputs_register[t]
-                ]) == 1
-                for t in tensor_set
-            ]
+            # if a layer does not need a right shift we set it to 0
+            constraint_list = list()
+            for t in tensor_set:
+                op_needs_right_shift = {self.rectangles[i]["op_needs_right_shift"] for i in potential_inplace_inputs_register[t]}
+                assert len(op_needs_right_shift) == 1, \
+                    f"every input has to have the same op, hence op_needs_right_shift"
+                right_shift_decision = (1 if next(iter(op_needs_right_shift)) else 0)
+                constraint_list.append(
+                    pyo.quicksum([
+                        model.decision_right_shift_inplace_tensor_in[i]
+                        for i in potential_inplace_inputs_register[t]
+                    ]) == right_shift_decision
+                )
+            return constraint_list
 
 
         def inplace_tensor_placement_rule(model, tensor_set):
@@ -439,8 +463,19 @@ class MILPAllocator(BaseAllocator):
                 potential_inplace_inputs = potential_inplace_inputs_register[t]
                 assert len(potential_inplace_inputs) != 0
                 for i in potential_inplace_inputs:
-                    output_start_referenced_to_input_right_shift_decision =\
-                        model.placement[i] - self.rectangles[i]["gap"] * (1 - model.decision_right_shift_inplace_tensor_in[i])
+
+                    # The start of the output is dependent on if a layer does a right_shift or
+                    # not, for conv, the output has to be placed below the input
+                    # but for layers like add, depthwise, upsample the output shares the same
+                    # memory start as the input
+                    if self.rectangles[i]["op_needs_right_shift"]:
+                        output_start_referenced_to_input_right_shift_decision = (
+                            model.placement[i] - self.rectangles[i]["gap"] *
+                            (1 - model.decision_right_shift_inplace_tensor_in[i])
+                        )
+                    else:
+                        output_start_referenced_to_input_right_shift_decision = model.placement[i]
+
                     constraint_list.append(
                         model.placement[t] - output_start_referenced_to_input_right_shift_decision <=\
                         M * (1 - model.decision_inplace_tensor_in[i])
@@ -453,20 +488,41 @@ class MILPAllocator(BaseAllocator):
 
         def effective_size_rule(model, tensor_set):
             """
-            z_i >= n_i + Delta_i * r_i, and z_t = n_t for everything else. Only a
-            shifted input reaches Delta past its own bytes; an unshifted one has
-            its output below it instead, covered by the output's own rectangle.
+            z_t = n_t for anything that is not a candidate, and for a candidate one
+            of two rows depending on where its op puts the output.
+
+                z_i >= n_i + Delta_i r_i    op_needs_right_shift, i.e. conv
+                z_i >= n_i + Delta_i d_i    everything else
+
+            An op that needs its output below its input reaches Delta past its own
+            bytes only when it is the input that moved; left unshifted the output
+            sits below it, covered by that rectangle. An op that shares the base
+            instead has the whole workspace above its input, so it reaches Delta
+            whenever the aliasing happens at all. Both collapse to n_i when the
+            candidate is not the one overwritten -- r_i <= d_i carries that for the
+            first row, d_i is written out in the second, which has no r_i to imply it.
             """
             constraint_list = list()
             for t in tensor_set:
                 if t in model.potential_inplace_tensors_in:
-                    constraint_list.append(
-                        model.effective_size[t] >= (
-                            self.rectangles[t]["size"] +
-                            self.rectangles[t]["gap"] *
-                            model.decision_right_shift_inplace_tensor_in[t]
+                    # if the effective_size of a tensor is dependent on if a right_shift
+                    # is done, it is currently only dependent for just conv
+                    if self.rectangles[t]["op_needs_right_shift"]:
+                        constraint_list.append(
+                            model.effective_size[t] >= (
+                                self.rectangles[t]["size"] + self.rectangles[t]["gap"] *
+                                model.decision_right_shift_inplace_tensor_in[t]
+                            )
                         )
-                    )
+                    else:
+                        # the tensor that can be chosen for inplace but with no right shift
+                        # when it is chosen, the gap is added but when it is not, it has to be 0
+                        constraint_list.append(
+                            model.effective_size[t] >= (
+                                self.rectangles[t]["size"] + self.rectangles[t]["gap"] *
+                                model.decision_inplace_tensor_in[t]
+                            )
+                        )
                 else:
                     model.effective_size[t].fix(self.rectangles[t]["size"])
             return constraint_list
@@ -580,12 +636,45 @@ class MILPAllocator(BaseAllocator):
             rec = self.rectangles[t]
             rec["placement"] = solved_int(pyo.value(model.placement[t]))
             if self.rectangles[t]["inplace"] is not None and self.rectangles[t]["inplace"] != op_inplace_type.force_not_inplace:
-                # skip for a pure output function
+                # skip for a pure output tenosr
                 rec["inplace_decision"] = bool(solved_int(model.decision_inplace_tensor_in[t]))
-                rec["right_shift"] = bool(solved_int(model.decision_right_shift_inplace_tensor_in[t]))
-                if rec["right_shift"]:
+                rec["right_shift_decision"] = bool(solved_int(model.decision_right_shift_inplace_tensor_in[t]))
+                if rec["right_shift_decision"]:
                     assert rec["inplace"] != op_inplace_type.force_not_inplace, \
                         "When the rec is right shifted, the inplace type must not be force_not_inplace"
                     assert rec["inplace_decision"], "When the rec is right shifted, the inplace decision has to be True"
-                    # gap is already set correctly
-                rec["effective_size"] = rec["size"] + (rec["gap"] if rec["right_shift"] else 0)
+            else:
+                rec["inplace_decision"] = rec["right_shift_decision"] = 0
+            
+            # input tensors
+            if t in model.potential_inplace_tensors_in:                    
+                if rec["inplace"] == op_inplace_type.force_not_inplace:
+                    # if the tensor is force to use dual buffer
+                    rec["gap"] = 0
+                else:
+                    if rec["inplace_decision"]:
+                        if rec["op_needs_right_shift"]:
+                            # when an op can choose to right shift or not like conv
+                            # if it does not the the output already position behind it so we do not add the gap
+                            # the selected inplace tensnor that was also shifted gets to keep its gap else it
+                            # is set to 0
+                            rec["gap"] = (rec["gap"] if rec["right_shift_decision"] else 0)
+                        else:
+                            # when an op has gap and cannot can not choose if it shifts or not like upSample
+                            # it keeps it gap
+                            pass
+                    else:
+                        # zero out the gap for potential inplace tensors that were not selected
+                        # input tensors not selected to be inplace
+                        rec["gap"] = 0
+            else:
+                # output only tensors
+                rec["gap"] = 0
+
+            rec["effective_size"] = rec["size"] + rec["gap"]
+
+        # a basic sanity check
+        assert int(round(pyo.value(model.largest_space_in_memory))) == int(round(self.get_peak())), (
+            f"the reported peak for the model is not the same as what the allocator determined ,"
+            f"this will an error and should be checked"
+        )

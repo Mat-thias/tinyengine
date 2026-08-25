@@ -86,8 +86,9 @@ class BaseAllocator:
                 # Memory actually touched while this tensor is live. Same as "size"
                 # for an ordinary tensor. This is to accomodate for layers that require
                 # right shift for their inplace operations like convolution.
-                "effective_size": size
-            }  # if this is set, we only need 1/4 of it after
+                # It is set by the allocator
+                "effective_size": None
+            }
         )
         return tensor_idx
 
@@ -105,6 +106,7 @@ class BaseAllocator:
         tensor_idx = tensor.allocator_idx
         inplace = tensor.inplace
         gap = tensor.gap
+        op_needs_right_shift = tensor.op_needs_right_shift
         inplace_tensor_out_idx = None if tensor.inplace_tensor_out is None else tensor.inplace_tensor_out.allocator_idx
         rec = self.rectangles[tensor_idx]
 
@@ -131,11 +133,12 @@ class BaseAllocator:
             assert rec["inplace_tensor_out_idx"] == inplace_tensor_out_idx, (
                 f"for an already assigned rectangle, the inplace_tensor_out_idx must match, "
                 f"but for tensor {tensor_idx} saw {inplace_tensor_out_idx} expected {rec['inplace_tensor_out_idx']}"
-            )     
+            )
         else:
             rec["inplace"] = inplace
             rec["gap"] = gap
             rec["inplace_tensor_out_idx"] = inplace_tensor_out_idx
+            rec["op_needs_right_shift"] = op_needs_right_shift
 
     def getIdxAddress(self, idx):
         target_rec = None
@@ -169,10 +172,13 @@ class BaseAllocator:
         )
         font_size = FIGURE_CONFIG["FONT_SIZE"]
 
+        # effective_size exclude outputs (they are not set by the milp allocator for tensors which are never input)
+        rectangles = [rec for rec in self.rectangles if (rec["start"] != rec["end"])]
+
         # The axes span the whole schedule: the last lifetime to end on x, and the
         # peak (placement + effective_size, the same quantity get_peak reports) on y.
-        max_x = max(rec["end"] for rec in self.rectangles)
-        max_y = max(rec["placement"] + rec["effective_size"] for rec in self.rectangles) / scale
+        max_x = max(rec["end"] for rec in rectangles)
+        max_y = max(rec["placement"] + rec["effective_size"] for rec in rectangles) / scale
         ax.set_xlim([0, max_x])
         # A little headroom so the rectangle that sets the peak does not sit flush
         # against the frame and become invisible.
@@ -209,7 +215,7 @@ class BaseAllocator:
         # first reaches it. Rectangles go on with add_patch, which does not register
         # a legend handle, so the swatches have to be built by hand.
         legend_handles = {}
-        for rec in self.rectangles:
+        for rec in rectangles:
             op_name = rec["op"].params["op"]
             if op_name not in legend_handles:
                 legend_handles[op_name] = matplotlib.patches.Patch(
@@ -224,7 +230,7 @@ class BaseAllocator:
             fontsize=font_size * 0.75,
         )
 
-        for cnt, rec in enumerate(self.rectangles):
+        for cnt, rec in enumerate(rectangles):
             start, end, placement, size, color = (
                 rec["start"],
                 rec["end"],

@@ -59,7 +59,8 @@ default_params = {
     # for partial channel update
     "first_k_channel": None,
     "inplace": op_inplace_type.flexible_inplace,
-    "color": "#38b6ff" # turocoious blue
+    "color": "#38b6ff", # turocoious blue
+    "op_needs_right_shift": True
 }
 
 
@@ -327,8 +328,9 @@ class Conv2d(basicOperator):
             if kernel_h > 1:
                 string += f",{str(params['input_zero_point'])}"
 
-            # adding the gap for inplace convolution
+            # adding the gap and the right_shift_decision  for inplace convolution
             string += f", {str(self.input_tensors[0].gap)}"
+            string += f", {'true' if self.input_tensors[0].right_shift_decision else 'false'}"
 
             # patch-based parameters
             if "is_patch" in params and params["is_patch"] and (params["kernel_h"] > 1 or params["kernel_w"] > 1):

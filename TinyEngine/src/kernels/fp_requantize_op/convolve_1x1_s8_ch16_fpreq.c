@@ -31,7 +31,8 @@ tinyengine_status convolve_1x1_s8_ch16_fpreq(q7_t *input,
 		const int32_t out_offset, const int32_t input_offset,
 		const int32_t out_activation_min, const int32_t out_activation_max,
 		q7_t *output, const uint16_t output_x, const uint16_t output_y,
-		const uint16_t output_ch, q15_t *runtime_buf, const int32_t gap) {
+		const uint16_t output_ch, q15_t *runtime_buf,
+		const uint32_t gap, const uint8_t right_shift) {
 	int32_t i_element;
 	(void) input_x;
 	(void) input_y;
@@ -40,7 +41,9 @@ tinyengine_status convolve_1x1_s8_ch16_fpreq(q7_t *input,
 	q15_t *two_column_buffer = runtime_buf;
 	q7_t *out = output;
 
-	RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
+	if (right_shift) {
+		RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
+	}
 	
 	const int32_t num_elements = output_x * output_y;
 	const int channel_div4 = (input_ch >> 2);

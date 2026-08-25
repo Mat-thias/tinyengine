@@ -56,7 +56,8 @@ default_params = {
     "output2_idx": None,
     "output2_dtype": "int8",
     "inplace": op_inplace_type.force_inplace,
-    "color": "#ff914d" # orange
+    "color": "#ff914d", # orange
+    "op_needs_right_shift": False
 }
 
 

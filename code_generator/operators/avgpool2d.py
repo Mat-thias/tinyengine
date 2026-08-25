@@ -48,7 +48,8 @@ default_params = {
     "input_dtype": "int8",
     "output_dtype": "int8",
     "inplace": op_inplace_type.flexible_inplace,
-    "color": "#cd6ce6" # purple
+    "color": "#cd6ce6", # purple
+    "op_needs_right_shift": False
 }
 
 

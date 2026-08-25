@@ -28,17 +28,19 @@
  * must leave the output at that same base. Before computing, the input is
  * shifted up by `gap` bytes so the output write frontier can never overtake
  * the input read frontier. `gap` is derived per layer by
- * right_inplace_gap_unpadded_ext() in code_generator/operators/right_inplace.py
- * and emitted as the last argument of the generated call.
+ * right_inplace_gap_dense_ext() in the project root's right_inplace.py, and
+ * emitted with the solver's `right_shift` decision as the last two arguments
+ * of the generated call.
  *
- * Rewrites `input` to point at the shifted data. It must do nothing at all
- * when the kernel is not aliasing: with output != input the caller's data is
- * already where the kernel should read it, so advancing `input` there would
- * read `gap` bytes past the start of the tensor.
+ * Only invoke this under `if (right_shift)`: that is the arrangement the
+ * allocator solved for. The output == input test below is a second lock on the
+ * same door -- with output != input the caller's data is already where the
+ * kernel should read it, so advancing `input` would read `gap` bytes past the
+ * start of the tensor.
  * -------------------------------------------------------------------- */
 #define RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap) \
 	do {                                                                          \
-		if ((output) == (input) && (gap) > 0) {                                   \
+		if ((output) == (input)) {                                   \
 			q7_t *_ri_base = (input);                                             \
 			uint32_t _ri_size = (uint32_t)(input_x) * (input_y) * (input_ch);     \
 			(input) = (input) + (gap);                                            \

@@ -31,7 +31,7 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 		const int32_t output_activation_max, q7_t *output,
 		const uint16_t output_x, const uint16_t output_y,
 		const uint16_t output_ch, q15_t *runtime_buf, q15_t *kbuf,
-		q7_t pad_value, const int32_t gap) {
+		q7_t pad_value, const uint32_t gap, const uint8_t right_shift) {
 	const int kernel_y = 3;
 	const int kernel_x = 3;
 
@@ -41,7 +41,9 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 	q15_t *two_column_buf = runtime_buf;
 	q7_t *out = output;
 
+	if (right_shift) {
 	RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
+	}
 
 	q15_t pad16 = pad_value;
 	const int16_t inoff16 = input_offset;

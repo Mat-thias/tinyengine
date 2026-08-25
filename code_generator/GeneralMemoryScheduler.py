@@ -37,7 +37,7 @@ from .constant import (
     TTYPE_TRAINING_WEIGHTS,
 )
 
-from .operators import add, avgpool2d, conv2d, depthwiseConv2d
+from .operators import add, avgpool2d, conv2d, depthwiseConv2d, maxpool2d, upsample, se_element_mult
 from .operators.basic_utils import op_inplace_type, tensor_io, InplaceMode
 
 # NOTE: Currently only supports ops a single output
@@ -47,9 +47,12 @@ INPLACE_OPS_INPUT_GROUPING = {
         avgpool2d.AvgPool2d,
         conv2d.Conv2d,
         depthwiseConv2d.DepthwiseConv2d,
+        maxpool2d.maxPool2d,
+        upsample.upSample
     ),
     2: (
         add.Add,
+        se_element_mult.SEelementmult
     )
 }
 
@@ -192,6 +195,10 @@ class GeneralMemoryScheduler:
             if t.inplace is None or t.inplace == op_inplace_type.flexible_inplace:
                 t.inplace = inplace
 
+            # Determines if the allocator should factor in the right_shift of ignore it
+            # it ignores it for most layers except conv currently
+            t.op_needs_right_shift = op.params["op_needs_right_shift"]
+
             # aligning the memory so the memmove operation is not fragmented which speeds it up
             t.gap = 0 if t.inplace == op_inplace_type.force_not_inplace else \
                     align_byte_to_n(gap, self.align_to_n_bytes)
@@ -238,6 +245,16 @@ class GeneralMemoryScheduler:
                     # For a naive/dual-buffer comparison schedule only
                     if self.inplace_mode == InplaceMode.depthwise_only:
                         t.inplace = op.params["inplace"]
+                elif isinstance(op, upsample.upSample):
+                    assert op.params["factor"].is_integer(), \
+                        f"Upsample only supports integer factors, received {op.params["factor"]}"
+                    output_h = op.params["output_h"]
+                    output_w = op.params["output_w"]
+                    output_c = op.params["output_c"]
+                    input_h = op.params["input_h"]
+                    input_w = op.params["input_w"]
+                    input_c = op.params["input_c"]
+                    gap = (output_h * output_w * output_c) - (input_h * input_w * input_c)
 
                 tensor_inplace_parameters_in(t, op, gap)
 
@@ -380,7 +397,7 @@ class GeneralMemoryScheduler:
         #       - an intermidate tensor which is flexible inplace by a force not inplace, the same reason as the offer
         assert len(graph_idx_register) == len(graph_idx_allocated_idx), f"graph tree malformed"
         for (graph_idx, tensors), (graph_idx_, allocated_idx) in zip(graph_idx_register.items(), graph_idx_allocated_idx.items()):
-            assert graph_idx == graph_idx_, f"graph tree malformed"
+            assert graph_idx == graph_idx_, f"graph tree is malformed"
 
             last_consumed_t = [t for t in tensors if t.is_last_consumed]
             assert len(last_consumed_t) <= 1, "Only one tensor should be the last, graph malformed"
@@ -413,10 +430,8 @@ class GeneralMemoryScheduler:
         for op in self.layer:
             for t in op.input_tensors:
                 rec = self.allocator.rectangles[t.allocator_idx]
-                if rec["inplace"] is not None and rec["inplace"] != \
-                    op_inplace_type.force_not_inplace and rec["right_shift"]:
-                    t.gap = rec["gap"]
-                else: t.gap = 0
+                t.gap = rec["gap"]
+                t.right_shift_decision = rec["right_shift_decision"]
 
         self.allocator.visualize(self.mem_visual_path)
         self._enlargeBuffer("input_output", self.allocator.get_peak())
