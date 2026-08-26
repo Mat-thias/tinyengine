@@ -111,6 +111,14 @@ tinyengine_status avg_pooling(const q7_t *input, const uint16_t input_h, const u
                               const uint16_t output_w, const int32_t out_activation_min,
                               const int32_t out_activation_max, q7_t *output);
 
+tinyengine_status max_pooling(const q7_t *input, const uint16_t input_h, const uint16_t input_w, const uint16_t input_c,
+                              const uint16_t sample_h, const uint16_t sample_w, const uint16_t output_h,
+                              const uint16_t output_w, const int32_t out_activation_min,
+                              const int32_t out_activation_max, q7_t *output);
+
+tinyengine_status upsample_byte(const q7_t *input, const uint16_t input_x, const uint16_t input_y,
+                                const uint16_t input_ch, q7_t *output, const uint16_t sample_factor);
+
 tinyengine_status fully_connected_fp(const float *input, const uint16_t input_x, const uint16_t input_y,
                                      const uint16_t input_ch, const uint16_t output_ch, const float *bias,
                                      const float *weights, float *output);
