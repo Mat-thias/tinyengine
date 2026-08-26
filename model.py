@@ -1,1 +1,0 @@
-/home/matthias/Documents/Research/right_inplace_conv/model.py
