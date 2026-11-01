@@ -54,7 +54,7 @@ sys.path.insert(0, "..")
 
 import argparse
 
-from code_generator.CodegenUtilTFlite import GenerateSourceFilesFromTFlite, InplaceMode
+from code_generator.CodegenUtilTFlite import GenerateSourceFilesFromTFlite, InplaceMode, AllocatorType
 from mcunet.mcunet.model_zoo import download_tflite, net_id_list
 
 parser = argparse.ArgumentParser("mcunet")
@@ -72,6 +72,10 @@ parser.add_argument(
     help="the location to save the tensor lifecycle visualization"
 )
 parser.add_argument(
+    "-a", "--allocator_type", type=str, default="first_fit", choices=[t.name for t in AllocatorType],
+    help="selects the allocator type to use"
+)
+parser.add_argument(
     "-m", "--inplace_mode", default="full", choices=[mode.name for mode in InplaceMode],
     help="selects the inplace mode",
 )
@@ -83,12 +87,13 @@ net_id = args.net_id or f"mcunet-in{args.x}"
 # Fetched once and cached by the model zoo; later runs are offline.
 tflite_path = download_tflite(net_id=net_id)
 
-# Parses the tflite, schedules the activations (MILP), and emits the C source.
+# Parses the tflite, schedules the activations (-a, first fit by default), and emits the C source.
 # life_cycle_path is the allocation figure, not a model artefact.
 buffers, _ = GenerateSourceFilesFromTFlite(
     tflite_path,
     model_name=net_id,
     life_cycle_path=args.life_cycle_file,
+    allocator_type=AllocatorType(args.allocator_type),
     inplace_mode=InplaceMode(args.inplace_mode)
 )
 peakmem = buffers["input_output"]

@@ -43,6 +43,7 @@ Constants, off the rectangle t unless noted
                                         and every rectangle stacked end to end
     L           local                   layer big-M, the last end
     C           self.RIGHT_SHIFT_COST   bytes of peak a byte of memmove is worth
+    c           self.INPLACE_COST       bytes of peak a byte overwritten in place is worth
 
 Decisions
 ---------
@@ -59,7 +60,7 @@ Decisions
 
 Model, each row against the rule that builds it
 -----------------------------------------------
-    min  Z + sum_i C size_i r_i
+    min  Z - sum_i c size_i d_i + sum_i C size_i r_i
 
     Z    >= x_t + z_t                        largest_space_in_memory_rule
     x_t   = N a_t                            data_alligned_rule
@@ -158,9 +159,10 @@ select an address, gap_i d_i r_i to size the workspace -- so each is a big-M pai
 or an implication instead. An integer program is linear.
 
 Both freedoms can be taken away, to measure what they are worth or to fall back
-on the older behaviour. optimize_right_shift=False adds
-inplace_tensor_always_right_shift_rule, pinning one shift per output so every
-pair is separated by a memmove as it was before r_i existed.
+on the older behaviour. optimize_right_shift other than flexible_right_shift adds
+inplace_tensor_always_right_shift_rule, pinning r_i per output: force_right_shift
+separates every conv pair by a memmove as it was before r_i existed,
+force_not_right_shift never moves one.
 optimize_inplace_flexible=False adds not_inplace_flexible_rule, pinning each
 candidate's lifetime to the aliased one so no op may decline its buffer.
 """
@@ -170,7 +172,7 @@ import itertools
 import pyomo.environ as pyo
 
 from .base_allocator import BaseAllocator
-from ..operators.basic_utils import op_inplace_type
+from ..operators.basic_utils import op_inplace_type, RightShift
 
 __all__ = ["MILPAllocator"]
 
@@ -181,6 +183,10 @@ SOLVER_PATH = "/home/matthias/Documents/Research/opt/enterprise-analytics-dev/pa
 # prices at ~15 bytes, so the shift is taken unless placing the output low saves
 # more. Raise it to trade peak for fewer copies, lower it for the reverse.
 RIGHT_SHIFT_COST = 1e-4
+# What a byte overwritten in place is worth in bytes of peak, so among layouts of the
+# same peak the one aliasing the most is taken. Kept small: no MCUNet peak moved.
+INPLACE_COST = 1e-5
+
 
 
 class MILPAllocator(BaseAllocator):
@@ -189,14 +195,16 @@ class MILPAllocator(BaseAllocator):
         self,
         SRAM,
         model_name="mcunet_model",
-        optimize_right_shift=True,
+        optimize_right_shift=RightShift.flexible_right_shift,
         optimize_inplace_flexible=True,
         RIGHT_SHIFT_COST=RIGHT_SHIFT_COST,
+        INPLACE_COST=INPLACE_COST,
         align_to_n_bytes=4
     ):
         super().__init__(SRAM, model_name=model_name, align_to_n_bytes=align_to_n_bytes)
         self.optimize_right_shift = optimize_right_shift
         self.optimize_inplace_flexible = optimize_inplace_flexible
+        self.INPLACE_COST = INPLACE_COST
         self.RIGHT_SHIFT_COST = RIGHT_SHIFT_COST
 
     def define_model(self):
@@ -329,10 +337,10 @@ class MILPAllocator(BaseAllocator):
 
         def no_temporal_overlap_rule(model, tensor_set):
             """
-            e_t1 - start_t2 <= L p_t1t2, so p_t1t2 = 0 (no temporal overlap), forces t1 to end
-            before t2 starts.
-            One row is enough because the pair set is ordered by start: with start_t1 < start_t2,
-            t2 cannot end before t1 begins.
+            e_a - start_b <= L p_t1t2, where a is whichever of the pair starts first and b the
+            other, so p_t1t2 = 0 (no temporal overlap) forces a to end before b starts.
+            Because all tensors are created at different points, we only need to check the end,
+            so b cannot end before a begins.
             """
             constraint_list = list()
             for t1, t2 in tensor_set:
@@ -349,6 +357,10 @@ class MILPAllocator(BaseAllocator):
                 if start1 < start2:
                     constraint_list.append(
                         end1 - start2 <= L * model.tensor_temporal_overlap[t1, t2]
+                    )
+                elif start2 < start1:
+                    constraint_list.append(
+                        end2 - start1 <= L * model.tensor_temporal_overlap[t1, t2]
                     )
                 else:  # start1 == start2 == 0, layer 0 only
                     # if end1 + end2 > 1; model.tensor_temporal_overlap[t1, t2] = 1
@@ -437,7 +449,16 @@ class MILPAllocator(BaseAllocator):
                 op_needs_right_shift = {self.rectangles[i]["op_needs_right_shift"] for i in potential_inplace_inputs_register[t]}
                 assert len(op_needs_right_shift) == 1, \
                     f"every input has to have the same op, hence op_needs_right_shift"
-                right_shift_decision = (1 if next(iter(op_needs_right_shift)) else 0)
+                assert self.optimize_right_shift in (RightShift.force_right_shift, RightShift.force_not_right_shift), (
+                    f"Invalid optimize_right_shift, expected {(RightShift.force_right_shift, RightShift.force_not_right_shift)}, "
+                    f"received {self.optimize_right_shift}"
+                )
+                # For every inplace op, we force that the chosen input to be aliased is right_shifted for ops that support it
+                if self.optimize_right_shift is RightShift.force_right_shift:
+                    right_shift_decision = (1 if next(iter(op_needs_right_shift)) else 0)
+                else:
+                    # we force that no right shifting be done
+                    right_shift_decision = 0
                 constraint_list.append(
                     pyo.quicksum([
                         model.decision_right_shift_inplace_tensor_in[i]
@@ -582,7 +603,7 @@ class MILPAllocator(BaseAllocator):
         model.tensor_end_constraint = pyo.ConstraintList(rule=tensor_end_rule(model, model.tensors))
         model.effective_size_constraint = pyo.ConstraintList(rule=effective_size_rule(model, model.tensors))
         model.inplace_tensor_right_shift_constraint = pyo.ConstraintList(rule=inplace_tensor_right_shift_rule(model, model.potential_inplace_tensors_in))
-        if not self.optimize_right_shift:
+        if self.optimize_right_shift !=  RightShift.flexible_right_shift:
             model.inplace_tensor_always_right_shift_constraint = pyo.ConstraintList(rule=inplace_tensor_always_right_shift_rule(model, model.potential_inplace_tensors_out))
         if not self.optimize_inplace_flexible:
             model.not_inplace_flexible_constraint = pyo.ConstraintList(rule=not_inplace_flexible_rule(model, model.potential_inplace_tensors_out))
@@ -595,12 +616,17 @@ class MILPAllocator(BaseAllocator):
         model.force_inplace_tensor_decision_in_rule_constraint = pyo.ConstraintList(rule=force_inplace_tensor_decision_in_rule(model, model.potential_inplace_tensors_in))
 
         # model objective, the largest space in memory touched
+        inplace_tensor_cost = pyo.quicksum([
+            self.INPLACE_COST * model.decision_inplace_tensor_in[i]
+            * self.rectangles[i]["size"]
+            for i in model.potential_inplace_tensors_in
+        ])
         inplace_tensor_right_shift_cost = pyo.quicksum([
             self.RIGHT_SHIFT_COST * model.decision_right_shift_inplace_tensor_in[i]
             * self.rectangles[i]["size"]
             for i in model.potential_inplace_tensors_in
         ])
-        objective_fun = model.largest_space_in_memory + inplace_tensor_right_shift_cost
+        objective_fun = model.largest_space_in_memory - inplace_tensor_cost + inplace_tensor_right_shift_cost
         model.objective = pyo.Objective(expr=objective_fun, sense=pyo.minimize)
 
         return model
@@ -611,7 +637,8 @@ class MILPAllocator(BaseAllocator):
         Solve and write x_t back to each rectangle's "placement". get_peak()
         then reads Z off those placements.
         """
-        print(f"Deriving the memory schedule for {len(self.rectangles)} activation tensors.")
+        super().allocate()
+
         model = self.define_model()
         solver = pyo.SolverFactory(SOLVER, executable=os.path.join(SOLVER_PATH, SOLVER))
 

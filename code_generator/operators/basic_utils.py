@@ -214,6 +214,12 @@ class tensor_io(Enum):
     in_ = 0
     out_ = 1
 
+class RightShift(Enum):
+    """Specifies different right shift chose"""
+    force_not_right_shift = "force_not"
+    force_right_shift = "force" # this should never be choosen, it has no benefit
+    flexible_right_shift = "flexible"
+
 class tensor:
     byte_size = {
         "bool": 1,

@@ -19,6 +19,8 @@
 import sys
 from enum import Enum
 from collections import defaultdict
+from .allocator.base_allocator import AllocatorType
+from .allocator.firstFit import FirstFit
 from .allocator.milp_allocator import MILPAllocator
 
 # root to the right_inplace to load the gap formular
@@ -38,7 +40,7 @@ from .constant import (
 )
 
 from .operators import add, avgpool2d, conv2d, depthwiseConv2d, maxpool2d, upsample, se_element_mult
-from .operators.basic_utils import op_inplace_type, tensor_io, InplaceMode
+from .operators.basic_utils import op_inplace_type, tensor_io, InplaceMode, RightShift
 
 # NOTE: Currently only supports ops a single output
 INPLACE_OPS_INPUT_GROUPING = {
@@ -67,8 +69,9 @@ class GeneralMemoryScheduler:
         outputTables=None,
         mem_visual_path="codegen/allocation.png",
         VisaulizeTrainable=True,
+        allocator_type=AllocatorType.MILP,
         inplace_mode=InplaceMode.full,
-        optimize_right_shift=True,
+        optimize_right_shift=RightShift.flexible_right_shift,
         optimize_inplace_flexible=True,
         right_shift_cost = 1e-4,
         align_to_n_bytes=4,
@@ -90,14 +93,27 @@ class GeneralMemoryScheduler:
         self.bias = 0
         self.scale = 0
         self.code = 0
-        self.allocator = MILPAllocator(
-            memory_limit,
-            model_name=model_name,
-            optimize_right_shift=optimize_right_shift,
-            optimize_inplace_flexible = optimize_inplace_flexible,
-            RIGHT_SHIFT_COST=right_shift_cost,
-            align_to_n_bytes=align_to_n_bytes
-        )
+
+        if allocator_type == AllocatorType.MILP:
+            self.allocator = MILPAllocator(
+                memory_limit,
+                model_name=model_name,
+                optimize_right_shift=optimize_right_shift,
+                optimize_inplace_flexible = optimize_inplace_flexible,
+                RIGHT_SHIFT_COST=right_shift_cost,
+                align_to_n_bytes=align_to_n_bytes
+            )
+        elif allocator_type == AllocatorType.first_fit:
+            self.allocator = FirstFit(
+                memory_limit,
+                model_name=model_name,
+                align_to_n_bytes=align_to_n_bytes
+            )
+        else:
+            raise ValueError(
+                f"Invalid allocator type, currently only supports {[t.name for t in AllocatorType]}"
+            )
+        
         self.inplace_mode = inplace_mode
         self.outputTables = outputTables
         self.USE_INPLACE = inplace
@@ -287,7 +303,7 @@ class GeneralMemoryScheduler:
             # add each tensor
             training_start_idx = _find_training_idx(layers=self.layer)
             assert training_start_idx == len(self.layer), \
-                f"The current implementation does not support traning yet, this is a guide for that"
+                f"The current implementation does not support traning yet, this is a guard for that"
             for cnt, (t, tio) in enumerate(unallocated_tensors):
                 t.align_to_n_bytes = self.align_to_n_bytes
                 start_idx = i
@@ -414,6 +430,7 @@ class GeneralMemoryScheduler:
                     ))
                     t.gap = last_consumed_t.gap
                     t.inplace_tensor_out = last_consumed_t.inplace_tensor_out
+                    t.op_needs_right_shift = last_consumed_t.op_needs_right_shift
 
         # Now that every rectangle exists, hand the allocator each tensor that is
         # can be overwritten and the output that can overwrite it.
