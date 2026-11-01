@@ -16,10 +16,10 @@
 # Target ISA:  ARMv7E-M
 # ----------------------------------------------------------------------
 
+from enum import Enum
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
-from tqdm import tqdm
 
 from code_generator.constant import (
     FIGURE_CONFIG,
@@ -30,6 +30,12 @@ from code_generator.constant import (
     TTYPE_TRAINING_WEIGHTS,
 )
 from ..operators.basic_utils import op_inplace_type, tensor_io
+
+
+class AllocatorType(Enum):
+    """Select different allocator types"""
+    MILP = "MILP"
+    first_fit = "first_fit"
 
 
 class BaseAllocator:
@@ -151,9 +157,6 @@ class BaseAllocator:
     def allocate(self):
         # place each rectangle
         print(f"Deriving the memory schedule for {len(self.rectangles)} activation tensors.")
-        for cnt, rec in enumerate(tqdm(self.rectangles)):
-            # fit each tensor into the memmory
-            rec["placement"] = self.fit(rec)
 
     def get_peak(self):
         peak = 0
