@@ -307,9 +307,10 @@ class GeneralMemoryScheduler:
             for cnt, (t, tio) in enumerate(unallocated_tensors):
                 t.align_to_n_bytes = self.align_to_n_bytes
                 start_idx = i
-                # TODO: this is temp solution
-                if training_start_idx > i and "out_multiply" not in t.graph_idx:
-                    end_idx = i + 1 if i == 0 else num_layers
+                # a tensor no later layer reads dies with this layer, unless it is a model output; a patch
+                # stage output is copied into the assembled buffer after each patch, so it is not one
+                if tio == tensor_io.out_ and not op.params.get("is_patch", False):
+                    end_idx = num_layers
                 else:
                     end_idx = i + 1
                 for idx in range(start_idx + 1, num_layers):
