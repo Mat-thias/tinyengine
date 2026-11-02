@@ -44,9 +44,7 @@ tinyengine_status convolve_1x1_s8_fpreq(q7_t *input,
 	q15_t *two_column_buffer = runtime_buf;
 	q7_t *out = output;
 
-	if (right_shift) {
-		RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
-	}
+	if (right_shift) RIGHT_INPLACE_SHIFT_INPUT(input, output, input_x, input_y, input_ch, gap);
 
 	const int32_t num_elements = output_x * output_y;
 	const int channel_div4 = (input_ch >> 2);
