@@ -241,6 +241,12 @@ class GeneralMemoryScheduler:
                     # adding gap to the output tensor only for conv2d,
                     # to cater for the inplace convolution head room
                     params = op.params
+
+                    # A patch holds its padding as rows/columns inside its own buffer, which the
+                    # kernel skips via pad_t/pad_b/pad_l/pad_r instead of reading past the edge,
+                    # so every tap lands in the buffer: padding 0 relative to it.
+                    padding = 0 if params.get("is_patch", False) else params["padding"]
+
                     # dilation is not set in the current implementation
                     gap = right_inplace_gap_dense_ext(
                         cin=params["input_c"], cout=params["output_c"],
@@ -248,7 +254,7 @@ class GeneralMemoryScheduler:
                         hin=params["input_h"], win=params["input_w"],
                         s_h=params["stride_h"], s_w=params["stride_w"],
                         d_h=1, d_w=1,
-                        p_h=params["padding"], p_w=params["padding"],
+                        p_h=padding, p_w=padding,
                         load_input_receptive_field=True
                     )
                     # if it is not the last consumed, it must be preserved, hence not in place
@@ -327,15 +333,11 @@ class GeneralMemoryScheduler:
                             all_t_size += o.len
                             ttype = TTYPE_TRAINING_GRADIENT
 
-                # for patch based inference, we need the input tensro to be allocated in the patch inference stage
-                assert "is_start_of_normal_inference_block" not in op.params, (
-                    "the current implementation doesn't support patch based inference but received "
-                    f"`is_start_of_normal_inference_block` for {op} which signifies a patch based inference"
-                )
                 if (
                     "is_start_of_normal_inference_block" in op.params
                     and op.params["is_start_of_normal_inference_block"]
                 ):
+                    # pin the input for the start of normal inference block to exist from the start
                     if t in op.input_tensors:
                         start_idx = 0
                 # add the tensor
