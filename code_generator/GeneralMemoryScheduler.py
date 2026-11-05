@@ -269,7 +269,7 @@ class GeneralMemoryScheduler:
                         t.inplace = op.params["inplace"]
                 elif isinstance(op, upsample.upSample):
                     assert op.params["factor"].is_integer(), \
-                        f"Upsample only supports integer factors, received {op.params["factor"]}"
+                        f"Upsample only supports integer factors, received {op.params['factor']}"
                     output_h = op.params["output_h"]
                     output_w = op.params["output_w"]
                     output_c = op.params["output_c"]
