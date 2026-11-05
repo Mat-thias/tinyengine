@@ -176,8 +176,10 @@ from ..operators.basic_utils import op_inplace_type, RightShift
 
 __all__ = ["MILPAllocator"]
 
-SOLVER = "scip"
-SOLVER_PATH = "/home/matthias/Documents/Research/opt/enterprise-analytics-dev/pai_anop/features/opt/solvers/linux/ampl.linux64/ampl.linux-intel64"
+# Any solver pyomo drives; the executable is looked up on PATH unless TINYENGINE_MILP_SOLVER_PATH
+# names the directory it is in.
+SOLVER = os.environ.get("TINYENGINE_MILP_SOLVER", "scip")
+SOLVER_PATH = os.environ.get("TINYENGINE_MILP_SOLVER_PATH")
 
 # What a byte of memmove is worth in bytes of peak. At 1e-4 a 154,880 byte copy
 # prices at ~15 bytes, so the shift is taken unless placing the output low saves
