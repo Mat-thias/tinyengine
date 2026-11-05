@@ -32,6 +32,7 @@ def GenerateSourceFilesFromTFlite(
     optimize_inplace_flexible=True,
     right_shift_cost = 1e-4,
     model_name="mcunet_model",
+    generate_code=True,
     life_cycle_path=None
 ):
     use_inplace = True
@@ -65,21 +66,22 @@ def GenerateSourceFilesFromTFlite(
         memory_scheduler.USE_INPLACE = use_inplace
         memory_scheduler.allocateMemory()
 
-        outTable = tf_convertor.outputTables if hasattr(tf_convertor, "outputTables") else []
-        code_generator = CodeGenerator(
-            memsche=memory_scheduler,
-            inplace=memory_scheduler.USE_INPLACE,
-            unsigned_input=False,
-            patch_params=None,
-            FP_output=False,
-            profile_mode=False,
-            fp_requantize=True,
-            tflite_op=False,
-            dummy_address=False,
-            outputTables=outTable,
-        )
-        # set detection outputs before codegen if any
-        code_generator.codeGeneration()
+        if generate_code:
+            outTable = tf_convertor.outputTables if hasattr(tf_convertor, "outputTables") else []
+            code_generator = CodeGenerator(
+                memsche=memory_scheduler,
+                inplace=memory_scheduler.USE_INPLACE,
+                unsigned_input=False,
+                patch_params=None,
+                FP_output=False,
+                profile_mode=False,
+                fp_requantize=True,
+                tflite_op=False,
+                dummy_address=False,
+                outputTables=outTable,
+            )
+            # set detection outputs before codegen if any
+            code_generator.codeGeneration()
 
         return (
             memory_scheduler.buffers,
