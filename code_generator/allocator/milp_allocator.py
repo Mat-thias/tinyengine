@@ -642,7 +642,11 @@ class MILPAllocator(BaseAllocator):
         super().allocate()
 
         model = self.define_model()
-        solver = pyo.SolverFactory(SOLVER, executable=os.path.join(SOLVER_PATH, SOLVER))
+        if SOLVER_PATH is None:
+            # pyomo finds the executable on PATH
+            solver = pyo.SolverFactory(SOLVER)
+        else:
+            solver = pyo.SolverFactory(SOLVER, executable=os.path.join(SOLVER_PATH, SOLVER))
 
         results = solver.solve(model, tee=False)
         # Check before reading the variables: an unsolved model leaves every
