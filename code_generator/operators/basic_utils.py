@@ -27,9 +27,6 @@ __all__ = [
     "overwrite_dicts",
     "deep_copy_dicts",
     "isweightstr",
-    "isconstanttstr",
-    "islabelstr",
-    "isParamstr",
 ]
 FORCE_DTYPE = None
 
@@ -368,32 +365,7 @@ def deep_copy_dicts(dst):
     return deepcopy(dst)
 
 
-def get_dtype(tensor_info):
-    if "dtype" in tensor_info:
-        return tensor_info["dtype"]
-    else:
-        return "int8"
-
-
 def isweightstr(str):
     if "weight" in str:
-        return True
-    return False
-
-
-def isconstanttstr(str):
-    if "constant" in str:
-        return True
-    return False
-
-
-def islabelstr(str):
-    if "label" in str:
-        return True
-    return False
-
-
-def isParamstr(str):
-    if "scale" in str or "weight" in str or "bias" in str:
         return True
     return False
