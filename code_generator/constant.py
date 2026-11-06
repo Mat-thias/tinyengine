@@ -25,8 +25,6 @@ FUSHION_CONFIG = {
     FUSE_SGD_UPDATE_STR: True,
 }
 INFERECE_WEIGHT_SIZE = 1
-USE_BIT_MASK = True
-USE_TTE_INT8 = True
 # end: for forcelly cast to fp32
 TTYPE_STATIC_WEIGHT = "static_weights"
 TTYPE_TRAINING_GRADIENT = "training_gradient"

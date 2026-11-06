@@ -13,11 +13,11 @@
 # ----------------------------------------------------------------------
 
 """
-Codegen entry point for the models in the MCUNet zoo
+Memory schedule for the models in the MCUNet zoo
 ============================================================
 
-Generates the C source for one released model and reports the peak activation
-memory the schedule needs.
+Schedules the activations of one released model and reports the peak
+activation memory the schedule needs.
 
 Usage
 -----
@@ -33,16 +33,7 @@ directory, not to this file.
 
 Writes
 ------
-    codegen/Source/genModel.c        the invoke() call sequence
-    codegen/Include/genModel.h       weights, scales, and the activation buffer
-    codegen/Include/genModelShape.h  input / output shapes, for the harness
-    codegen/Source/depthwise_*.c     the depthwise kernels this model needs
     ./lifecycle.png                  tensor lifetimes against memory address
-
-The generated files are overwritten on every run, so codegen/ only ever holds
-the most recently generated model. Both harnesses (deploy/pc and deploy_pico2)
-compile against whatever is there, which is why they read the shapes from
-genModelShape.h rather than hardcoding one model's resolution.
 """
 
 import sys
@@ -87,7 +78,7 @@ net_id = args.net_id or f"mcunet-in{args.x}"
 # Fetched once and cached by the model zoo; later runs are offline.
 tflite_path = download_tflite(net_id=net_id)
 
-# Parses the tflite, schedules the activations (-a, first fit by default), and emits the C source.
+# Parses the tflite and schedules the activations (-a, first fit by default).
 # life_cycle_path is the allocation figure, not a model artefact.
 buffers, _ = GenerateSourceFilesFromTFlite(
     tflite_path,

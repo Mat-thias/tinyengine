@@ -26,7 +26,6 @@ __all__ = [
     "tensor",
     "overwrite_dicts",
     "deep_copy_dicts",
-    "isweightstr",
 ]
 FORCE_DTYPE = None
 
@@ -46,30 +45,6 @@ class basicOperator:
         self.output_tensors = []
         if not hasattr(self, "params"):
             self.params = {}
-
-    def generate_inference_str(self) -> str:
-        raise NotImplementedError
-
-    def _op_hparam_info(self):
-        string = ""
-        if "input_c" in self.params:
-            string += f"r{self.params['input_h']}x{self.params['input_w']}x{self.params['input_c']}"
-        elif "input_size" in self.params:
-            string += f"size_{self.params['input_size']}"
-        elif "matA_row" in self.params:
-            string += f"r{self.params['matA_row']}x{self.params['matA_col']}"
-        if "output_c" in self.params:
-            string += f"_{self.params['output_h']}x{self.params['output_w']}x{self.params['output_c']}"
-        elif "matB_row" in self.params and "matB_col" in self.params:
-            string += f"_{self.params['matB_row']}x{self.params['matB_col']}"
-
-        if len(string) == 0:
-            string = "no_info"
-
-        return string
-
-    def _op_string(self) -> str:
-        return self.params["op"]
 
     def get_macs(self) -> int:
         return 0
@@ -97,26 +72,6 @@ class basicOperator:
     def get_kbuf_size(self) -> int:
         return 0
 
-    def generate_profiling_str(self, *args) -> str:
-        if len(args) == 0:
-            inf_str = self.generate_inference_str()
-        else:
-            inf_str = self.generate_inference_str(*args)
-        op_str = self._op_string() + " " + self._op_hparam_info() + " " + str(self.get_macs()) + " "
-        string = (
-            """start = HAL_GetTick();
-for(profile_i = 0; profile_i < RUNS; profile_i++) {
-    """
-            + inf_str
-            + """}
-end = HAL_GetTick();
-sprintf(buf, \""""
-            + op_str
-            + """%.2f\\r\\n", (float)(end - start)/(float)RUNS);printLog(buf);
-"""
-        )
-        return string
-
     def _add_input(self, graph_idx, dtype, *dims):
         self.input_tensors.append(tensor(graph_idx, dtype, dims))
 
@@ -130,53 +85,6 @@ sprintf(buf, \""""
         if hasattr(self, "params"):
             self.params["output_idx"] = idx
         self.output_tensors[0].graph_idx = idx
-
-    def _getBufferstr(self, location, offset):
-        if location == "front":
-            return f"&buffer0[{offset}]"
-        elif location == "end":
-            return f"&buffer0[{offset}]"
-        elif location == "residual":
-            return f"&buffer1[{offset}]"
-        elif location.startswith("stage"):
-            return f"&buffer{location}[{offset}]"
-        elif location.startswith("dagop"):
-            return f"&buffer{location}[{offset}]"
-        else:
-            raise NotImplementedError
-
-    def _getBufferstrCast(self, location, offset, dtype="float32"):
-        ret = ""
-
-        cast_type = "float"
-        if dtype == "int8":
-            cast_type = "signed char"
-        elif dtype == "bool":
-            cast_type = "bool"
-        elif dtype == "int32":
-            cast_type = "int32_t"
-        cast_str = f"({cast_type}*)"
-
-        ret += cast_str
-
-        if location == "front":
-            ret += f"&buffer0[{offset}]"
-        elif location == "end":
-            ret += f"&buffer0[{offset}]"
-        elif location == "residual":
-            ret += f"&buffer1[{offset}]"
-        elif location.startswith("stage"):
-            ret += f"&buffer{location}[{offset}]"
-        elif location.startswith("dagop"):
-            ret += f"&buffer{location}[{offset}]"
-        elif "weight" in location:
-            ret += f"{location}"
-        elif "bias" in location:
-            ret += f"{location}"
-        else:
-            raise NotImplementedError
-
-        return ret
 
 
 class InplaceMode(Enum):
@@ -363,9 +271,3 @@ def align_byte_to_n(byte_cnt, n=None):
 
 def deep_copy_dicts(dst):
     return deepcopy(dst)
-
-
-def isweightstr(str):
-    if "weight" in str:
-        return True
-    return False

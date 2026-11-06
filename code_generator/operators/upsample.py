@@ -76,11 +76,3 @@ class upSample(basicOperator):
 
         if None in default_params:
             warnings.warn(f"parameters are not all set for op {self.params['op']}")
-
-    def generate_inference_str(self):
-        params = self.params
-        string = f"upsample_byte({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])}, "
-        string += f"{str(params['input_h'])}, {str(params['input_w'])}, {str(params['input_c'])}, "
-        string += f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])}, "
-        string += f"{str(int(params['factor']))});\n"
-        return string

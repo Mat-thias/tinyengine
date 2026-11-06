@@ -1,6 +1,5 @@
 import warnings
 
-from ..constant import USE_BIT_MASK
 from .basic_utils import basicOperator, deep_copy_dicts, overwrite_dicts, op_inplace_type
 
 __all__ = ["Add"]
@@ -91,35 +90,3 @@ class Add(basicOperator):
     def get_macs(self) -> int:
         p = self.params
         return p["output_h"] * p["output_w"] * p["output_c"]
-
-    def generate_inference_str(self):
-        string = ""
-        params = self.params
-        if params["need_Bmask"]:
-            if USE_BIT_MASK:
-                string += (
-                    f"add_fpreq_bitmask({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
-                    + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-                )
-            else:
-                string += f"add_fpreq_mask({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
-                +f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-            string += (
-                f"{str(params['input_scale'])},{str(params['input_zero_point'])},"
-                + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
-                + f"{str(params['input2_scale'])},{str(params['input2_zero_point'])},"
-                + f"{str(params['output_scale'])},{str(params['output_zero_point'])},"
-                + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])},"
-                + f"{self._getBufferstr(params['output2_buf_add'], params['output2_buf_add_offset'])});\n"
-            )
-        else:
-            string += (
-                f"add_fpreq({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
-                + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-                + f"{str(params['input_scale'])},{str(params['input_zero_point'])},"
-                + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
-                + f"{str(params['input2_scale'])},{str(params['input2_zero_point'])},"
-                + f"{str(params['output_scale'])},{str(params['output_zero_point'])},"
-                + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
-            )
-        return string

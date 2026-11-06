@@ -20,7 +20,6 @@ import os
 import argparse
 from tempfile import TemporaryDirectory
 
-from code_generator.CodeGenerator import CodeGenerator
 from code_generator.GeneralMemoryScheduler import GeneralMemoryScheduler, AllocatorType, InplaceMode
 from code_generator.InputResizer import PatchResizer
 from code_generator.PatchBasedUtil import getPatchParams
@@ -59,7 +58,7 @@ life_cycle_path = args.life_cycle_file
 use_inplace = True
 n_patches = args.n_patches  # n_patches x n_patches patches
 split_index = args.split_index  # split at the split_index-th layer
-# 4. Let's generate source code for on-device deployment
+# 4. Schedule the activations, the patch stage included
 
 with TemporaryDirectory() as WORKING_DIR:
     if life_cycle_path is None:
@@ -71,7 +70,7 @@ with TemporaryDirectory() as WORKING_DIR:
     tf_convertor.parseOperatorInfo()
     layer = tf_convertor.layer
     outTable = []
-    VisaulizeTrainable = False  # disable for code gen
+    VisaulizeTrainable = False  # an inference graph has no trainable tensors to draw
     # Patch-based
     if n_patches is not None:
         patch_params = getPatchParams(layer, split_index, n_patches)
@@ -92,22 +91,6 @@ with TemporaryDirectory() as WORKING_DIR:
     memory_scheduler.USE_INPLACE = use_inplace
     memory_scheduler.allocateMemory()
     memory_scheduler.dumpLayerMem()
-
-    outTable = tf_convertor.outputTables if hasattr(tf_convertor, "outputTables") else []  # type: ignore
-    code_generator = CodeGenerator(
-        memsche=memory_scheduler,
-        inplace=memory_scheduler.USE_INPLACE,
-        unsigned_input=False,
-        patch_params=patch_params,
-        FP_output=False,
-        profile_mode=False,
-        fp_requantize=False,
-        tflite_op=False,
-        dummy_address=False,
-        outputTables=outTable,
-    )
-    # set detection outputs before codegen if any
-    code_generator.codeGeneration()
 
     peakmem = memory_scheduler.buffers["input_output"]
 

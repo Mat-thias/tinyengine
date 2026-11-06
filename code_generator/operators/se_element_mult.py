@@ -83,19 +83,3 @@ class SEelementmult(basicOperator):
     def get_macs(self) -> int:
         p = self.params
         return p["output_h"] * p["output_w"] * p["output_c"]
-
-    def generate_inference_str(self):
-        string = ""
-        params = self.params
-        string += (
-            f"element_mult_nx1({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-            + f"{str(int(params['input_h']))},"
-            + f"{str(int(params['input_w']))},"
-            f"{str(int(params['input_c']))},"
-            + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
-            + f"{str(params['input_zero_point'])},{str(params['input2_zero_point'])},"
-            + f"{str(params['output_zero_point'])},-127,128,"
-            + f"{str(params['output_effective_scale'])},"
-            + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
-        )
-        return string
