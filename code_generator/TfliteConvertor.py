@@ -185,6 +185,13 @@ class TfliteConvertor(object):
             self.layer.append(TF_Parser.parse_fc(op, self.model))
         elif op_code_str == "RESHAPE":
             self._convert_RESHAPE(op)
+        elif op_code_str == "SOFTMAX":
+            # There is no SOFTMAX layer, so it may only end the model, which then returns the logits it
+            # reads: one value per class, as large as the SOFTMAX's own output.
+            output_idx = get_output_tensors(op, self.model)[0].tensor_idx
+            assert output_idx in self.subgraph.OutputsAsNumpy(), (
+                f"SOFTMAX writing tensor {output_idx} is not the model's output, so it cannot be dropped"
+            )
         elif op_code_str in SKIP_OPs:
             pass
         else:
