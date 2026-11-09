@@ -1,5 +1,3 @@
-import math
-
 import numpy as np
 
 from code_generator.operators import conv2d, depthwiseConv2d
@@ -7,6 +5,7 @@ from code_generator.tflite import Model
 from code_generator.tflite.BuiltinOptions import BuiltinOptions
 from code_generator.tflite.Conv2DOptions import Conv2DOptions
 from code_generator.tflite.DepthwiseConv2DOptions import DepthwiseConv2DOptions
+from code_generator.tflite.Padding import Padding
 
 from .utils import (
     get_input_tensors,
@@ -49,6 +48,10 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
     # conv parameters
     stride_h = conv_options.StrideH()
     stride_w = conv_options.StrideW()
+    dilation_h = conv_options.DilationHFactor()
+    dilation_w = conv_options.DilationWFactor()
+    # the padding below, the in-place gap and patch planning all take the kernel undilated
+    assert dilation_h == dilation_w == 1, f"dilated convolution ({dilation_h}, {dilation_w}) is not supported"
 
     # shapes
     _, input_h, input_w, input_c = input_tensor.tensor.ShapeAsNumpy()
@@ -85,17 +88,25 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
     # quantized inference, used for requantize
     multiplier, shift = getMultiplierShift(effective_scale)
 
-    # every side is taken as padded by half the kernel along its axis
-    pad_t = pad_b = math.floor(kernel_h / 2)
-    pad_l = pad_r = math.floor(kernel_w / 2)
-
     # find previous layer and redirct the index and fuse pad into conv
     input_idx = input_tensor.tensor_idx
-    if tmpPADIndice is not None and tmpPADIndice.output_idx == input_tensor.tensor_idx:
-        input_idx = tmpPADIndice.input_idx
+    fused_pad = (tmpPADIndice or {}).get(input_tensor.tensor_idx)
+    if conv_options.Padding() == Padding.SAME:
+        assert fused_pad is None, f"a PAD before the SAME {op_code_str} would pad its input twice"
+        pad_t, pad_b = _same_padding(input_h, kernel_h, stride_h, output_h)
+        pad_l, pad_r = _same_padding(input_w, kernel_w, stride_w, output_w)
+    elif fused_pad is not None:
+        input_idx = fused_pad.input_idx
+        pad_t, pad_b, pad_l, pad_r = fused_pad.pad_t, fused_pad.pad_b, fused_pad.pad_l, fused_pad.pad_r
         # the conv reads the tensor from before the PAD, which is smaller by the padding
         input_h = input_h - (pad_t + pad_b)
         input_w = input_w - (pad_l + pad_r)
+    else:
+        pad_t = pad_b = pad_l = pad_r = 0
+    # a pad as wide as the kernel would leave an output reading nothing but padding
+    assert max(pad_t, pad_b) < kernel_h and max(pad_l, pad_r) < kernel_w, (
+        f"padding {(pad_t, pad_b, pad_l, pad_r)} against a {kernel_h}x{kernel_w} kernel"
+    )
 
     params = {
         # operator
@@ -109,6 +120,8 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
         "pad_r": pad_r,
         "stride_h": stride_h,
         "stride_w": stride_w,
+        "dilation_h": dilation_h,
+        "dilation_w": dilation_w,
         # tensor
         "input_idx": input_idx,
         "output_idx": output_tensor.tensor_idx,
@@ -141,3 +154,14 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
         op = depthwiseConv2d.DepthwiseConv2d(params)
 
     return op
+
+
+def _same_padding(extent, kernel, stride, output):
+    """The padding SAME puts before and after one axis.
+
+    SAME sizes the output at ceil(extent / stride) and pads by however far the last window
+    overruns the input. tflite puts the odd row of an odd total after, so a stride 2 3x3 conv
+    over an even extent pads (0, 1).
+    """
+    total = max((output - 1) * stride + kernel - extent, 0)
+    return total // 2, total - total // 2

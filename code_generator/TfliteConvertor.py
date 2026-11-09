@@ -20,7 +20,9 @@ import logging
 
 import code_generator.converters.tflite_parser as TF_Parser
 from code_generator.converters.tflite_parser.mean1dto2d import MEAN2D
-from code_generator.converters.tflite_parser.utils import get_input_tensors, get_output_tensors, getOpCodeStr, get_nhwc_from_shape
+from code_generator.converters.tflite_parser.utils import (
+    get_input_tensors, get_nhwc_from_shape, get_np_from_wrapper, get_output_tensors, getOpCodeStr
+)
 
 from .constant import SKIP_OPs
 from .tflite import Model
@@ -34,7 +36,8 @@ class TfliteConvertor(object):
         self.model = self.loadTFmodel(filepath)
         self.subgraph = self.model.Subgraphs(0)
         self.layer = []
-        self.tmpPADIndice = None
+        # every PAD folded into the op that reads it, by the tensor the PAD produces
+        self.tmpPADIndice = dict()
         self.skip_transpose = None
         self.average_1D_to_2D_holder = MEAN2D()  # For merging 1D to 2D
 
@@ -142,14 +145,12 @@ class TfliteConvertor(object):
         op_code_str = getOpCodeStr(op, self.model)
         if op_code_str == "CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
-            self.tmpPADIndice = None
         elif op_code_str == "ADD":
             self.layer.append(TF_Parser.parse_add(op, self.model))
         elif op_code_str == "AVERAGE_POOL_2D":
             self.layer.append(TF_Parser.parse_avgpool(op, self.model))
         elif op_code_str == "DEPTHWISE_CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
-            self.tmpPADIndice = None
         elif op_code_str == "PAD":
             self._convert_PAD(op)
         elif op_code_str == "RESIZE_NEAREST_NEIGHBOR":
@@ -194,8 +195,18 @@ class TfliteConvertor(object):
         assert len(output_tensors) == 1, "output tensors length should be 1"
         output_tensor = output_tensors[0]
 
+        # [[batch], [top, bottom], [left, right], [channel]]: only H and W fold into a conv
+        paddings = get_np_from_wrapper(input_tensors[1])
+        assert not paddings[0].any() and not paddings[3].any(), (
+            f"PAD {paddings.tolist()} pads the batch or channel axis, which cannot fold into a conv"
+        )
+
         # fuse pad into conv
-        self.tmpPADIndice = PAD_tensorIndice(input_tensor.tensor_idx, output_tensor.tensor_idx)
+        self.tmpPADIndice[output_tensor.tensor_idx] = PAD_tensorIndice(
+            input_tensor.tensor_idx, output_tensor.tensor_idx,
+            pad_t=int(paddings[1][0]), pad_b=int(paddings[1][1]),
+            pad_l=int(paddings[2][0]), pad_r=int(paddings[2][1]),
+        )
 
     def _convert_TRANSPOSE(self, op):
         # get input, weight, and output tensors
@@ -216,10 +227,23 @@ class TfliteConvertor(object):
         assert input_c == output_c, assert_reason
 
         # fuse pad into conv
-        self.skip_transpose = PAD_tensorIndice(input_tensor.tensor_idx, output_tensor.tensor_idx)
+        self.skip_transpose = SkipTensorIndices(input_tensor.tensor_idx, output_tensor.tensor_idx)
 
 
-class PAD_tensorIndice(object):
+class SkipTensorIndices(object):
+    """An op folded away: what it reads, and what it would have produced."""
+
     def __init__(self, input_idx, output_idx):
         self.input_idx = input_idx
         self.output_idx = output_idx
+
+
+class PAD_tensorIndice(SkipTensorIndices):
+    """A PAD folded into the op that reads it, with the padding it adds to each side."""
+
+    def __init__(self, input_idx, output_idx, pad_t, pad_b, pad_l, pad_r):
+        super().__init__(input_idx, output_idx)
+        self.pad_t = pad_t
+        self.pad_b = pad_b
+        self.pad_l = pad_l
+        self.pad_r = pad_r
