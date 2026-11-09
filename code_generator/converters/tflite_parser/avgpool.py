@@ -1,13 +1,12 @@
 from code_generator.operators import avgpool2d
 from code_generator.tflite import Model
 from code_generator.tflite.BuiltinOptions import BuiltinOptions
-from code_generator.tflite.Padding import Padding
 from code_generator.tflite.Pool2DOptions import Pool2DOptions
 
-from .utils import get_input_tensors, get_output_tensors, getOpCodeStr, getTensorTypeStr
+from .utils import fold_padding, get_input_tensors, get_output_tensors, getOpCodeStr, getTensorTypeStr
 
 
-def parse_avgpool(op, model: Model.Model):
+def parse_avgpool(op, model: Model.Model, tmpPADIndice=None):
     # operator
     op_code_str = getOpCodeStr(op, model)
 
@@ -42,12 +41,11 @@ def parse_avgpool(op, model: Model.Model):
     filter_h = pool2d_options.FilterHeight()
     filter_w = pool2d_options.FilterWidth()
 
-    # padding
-    if padding == Padding.VALID:
-        pad_h = 0
-        pad_w = 0
-    elif padding == Padding.SAME:
-        pass  # no support for now
+    # padding, and the tensor the pool really reads if a PAD is folded into it
+    input_idx, input_h, input_w, (pad_t, pad_b, pad_l, pad_r) = fold_padding(
+        op_code_str, padding, input_tensor,
+        (filter_h, filter_w), (stride_h, stride_w), (output_h, output_w), tmpPADIndice,
+    )
 
     # quantized setting
     input_zero_point = input_tensor.qnn_params["zero_point"]
@@ -63,10 +61,12 @@ def parse_avgpool(op, model: Model.Model):
         "filter_w": filter_w,
         "stride_h": stride_h,
         "stride_w": stride_w,
-        "pad_h": pad_h,
-        "pad_w": pad_w,
+        "pad_t": pad_t,
+        "pad_b": pad_b,
+        "pad_l": pad_l,
+        "pad_r": pad_r,
         # tensor
-        "input_idx": input_tensor.tensor_idx,
+        "input_idx": input_idx,
         "output_idx": output_tensor.tensor_idx,
         "input_h": input_h,
         "input_w": input_w,

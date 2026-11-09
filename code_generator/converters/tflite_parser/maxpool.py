@@ -3,10 +3,10 @@ from code_generator.tflite import Model
 from code_generator.tflite.BuiltinOptions import BuiltinOptions
 from code_generator.tflite.Pool2DOptions import Pool2DOptions
 
-from .utils import get_input_tensors, get_output_tensors
+from .utils import fold_padding, get_input_tensors, get_output_tensors
 
 
-def parse_maxpool(op, model: Model.Model):
+def parse_maxpool(op, model: Model.Model, tmpPADIndice=None):
     # Incase no params
     input_type = None
     input_zero_point = None
@@ -39,6 +39,12 @@ def parse_maxpool(op, model: Model.Model):
     filter_h = pool2d_options.FilterHeight()
     filter_w = pool2d_options.FilterWidth()
 
+    # padding, and the tensor the pool really reads if a PAD is folded into it
+    input_idx, input_h, input_w, (pad_t, pad_b, pad_l, pad_r) = fold_padding(
+        "MAX_POOL_2D", pool2d_options.Padding(), input_tensor,
+        (filter_h, filter_w), (stride_h, stride_w), (output_h, output_w), tmpPADIndice,
+    )
+
     pool_params = {
         # operator
         "op": "MAX_POOL_2D",
@@ -47,10 +53,12 @@ def parse_maxpool(op, model: Model.Model):
         "filter_w": filter_w,
         "stride_h": stride_h,
         "stride_w": stride_w,
-        "pad_h": 0,
-        "pad_w": 0,
+        "pad_t": pad_t,
+        "pad_b": pad_b,
+        "pad_l": pad_l,
+        "pad_r": pad_r,
         # tensor
-        "input_idx": input_tensor.tensor_idx,
+        "input_idx": input_idx,
         "output_idx": output_tensor.tensor_idx,
         "input_h": input_h,
         "input_w": input_w,

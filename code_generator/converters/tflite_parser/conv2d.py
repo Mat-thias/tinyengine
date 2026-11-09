@@ -5,9 +5,9 @@ from code_generator.tflite import Model
 from code_generator.tflite.BuiltinOptions import BuiltinOptions
 from code_generator.tflite.Conv2DOptions import Conv2DOptions
 from code_generator.tflite.DepthwiseConv2DOptions import DepthwiseConv2DOptions
-from code_generator.tflite.Padding import Padding
 
 from .utils import (
+    fold_padding,
     get_input_tensors,
     get_np_from_wrapper,
     get_output_tensors,
@@ -89,23 +89,9 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
     multiplier, shift = getMultiplierShift(effective_scale)
 
     # find previous layer and redirct the index and fuse pad into conv
-    input_idx = input_tensor.tensor_idx
-    fused_pad = (tmpPADIndice or {}).get(input_tensor.tensor_idx)
-    if conv_options.Padding() == Padding.SAME:
-        assert fused_pad is None, f"a PAD before the SAME {op_code_str} would pad its input twice"
-        pad_t, pad_b = _same_padding(input_h, kernel_h, stride_h, output_h)
-        pad_l, pad_r = _same_padding(input_w, kernel_w, stride_w, output_w)
-    elif fused_pad is not None:
-        input_idx = fused_pad.input_idx
-        pad_t, pad_b, pad_l, pad_r = fused_pad.pad_t, fused_pad.pad_b, fused_pad.pad_l, fused_pad.pad_r
-        # the conv reads the tensor from before the PAD, which is smaller by the padding
-        input_h = input_h - (pad_t + pad_b)
-        input_w = input_w - (pad_l + pad_r)
-    else:
-        pad_t = pad_b = pad_l = pad_r = 0
-    # a pad as wide as the kernel would leave an output reading nothing but padding
-    assert max(pad_t, pad_b) < kernel_h and max(pad_l, pad_r) < kernel_w, (
-        f"padding {(pad_t, pad_b, pad_l, pad_r)} against a {kernel_h}x{kernel_w} kernel"
+    input_idx, input_h, input_w, (pad_t, pad_b, pad_l, pad_r) = fold_padding(
+        op_code_str, conv_options.Padding(), input_tensor,
+        (kernel_h, kernel_w), (stride_h, stride_w), (output_h, output_w), tmpPADIndice,
     )
 
     params = {
@@ -154,14 +140,3 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
         op = depthwiseConv2d.DepthwiseConv2d(params)
 
     return op
-
-
-def _same_padding(extent, kernel, stride, output):
-    """The padding SAME puts before and after one axis.
-
-    SAME sizes the output at ceil(extent / stride) and pads by however far the last window
-    overruns the input. tflite puts the odd row of an odd total after, so a stride 2 3x3 conv
-    over an even extent pads (0, 1).
-    """
-    total = max((output - 1) * stride + kernel - extent, 0)
-    return total // 2, total - total // 2

@@ -39,8 +39,10 @@ def parse_mead1dto2d(op, model: Model.Model, MEAN2Dholder=None):
             "filter_w": filter_w,
             "stride_h": 1,
             "stride_w": 1,
-            "pad_h": 0,
-            "pad_w": 0,
+            "pad_t": 0,
+            "pad_b": 0,
+            "pad_l": 0,
+            "pad_r": 0,
             # tensor
             "input_idx": MEAN2Dholder.first_1D_input_idx,
             "output_idx": MEAN2Dholder.second_1D_output_idx,

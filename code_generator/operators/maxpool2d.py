@@ -30,8 +30,11 @@ default_params = {
     "filter_w": None,
     "stride_h": None,
     "stride_w": None,
-    "pad_h": None,
-    "pad_w": None,
+    # one value per side of the input: top, bottom, left, right
+    "pad_t": None,
+    "pad_b": None,
+    "pad_l": None,
+    "pad_r": None,
     "input_idx": None,
     "output_idx": None,
     # tensor related

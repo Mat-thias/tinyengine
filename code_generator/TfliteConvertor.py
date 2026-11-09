@@ -148,7 +148,7 @@ class TfliteConvertor(object):
         elif op_code_str == "ADD":
             self.layer.append(TF_Parser.parse_add(op, self.model))
         elif op_code_str == "AVERAGE_POOL_2D":
-            self.layer.append(TF_Parser.parse_avgpool(op, self.model))
+            self.layer.append(TF_Parser.parse_avgpool(op, self.model, self.tmpPADIndice))
         elif op_code_str == "DEPTHWISE_CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
         elif op_code_str == "PAD":
@@ -156,7 +156,7 @@ class TfliteConvertor(object):
         elif op_code_str == "RESIZE_NEAREST_NEIGHBOR":
             self.layer.append(TF_Parser.parse_upsample(op, self.model))
         elif op_code_str == "MAX_POOL_2D":
-            self.layer.append(TF_Parser.parse_maxpool(op, self.model))
+            self.layer.append(TF_Parser.parse_maxpool(op, self.model, self.tmpPADIndice))
         elif op_code_str in "MEAN":
             ret_op = TF_Parser.parse_mead1dto2d(op, self.model, self.average_1D_to_2D_holder)
             if ret_op is not None:
@@ -195,13 +195,13 @@ class TfliteConvertor(object):
         assert len(output_tensors) == 1, "output tensors length should be 1"
         output_tensor = output_tensors[0]
 
-        # [[batch], [top, bottom], [left, right], [channel]]: only H and W fold into a conv
+        # [[batch], [top, bottom], [left, right], [channel]]: only H and W fold into a conv or pool
         paddings = get_np_from_wrapper(input_tensors[1])
         assert not paddings[0].any() and not paddings[3].any(), (
-            f"PAD {paddings.tolist()} pads the batch or channel axis, which cannot fold into a conv"
+            f"PAD {paddings.tolist()} pads the batch or channel axis, which cannot fold into a conv or pool"
         )
 
-        # fuse pad into conv
+        # fuse pad into the conv or pool that reads it
         self.tmpPADIndice[output_tensor.tensor_idx] = PAD_tensorIndice(
             input_tensor.tensor_idx, output_tensor.tensor_idx,
             pad_t=int(paddings[1][0]), pad_b=int(paddings[1][1]),

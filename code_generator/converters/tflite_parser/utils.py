@@ -5,6 +5,7 @@ import numpy as np
 
 from code_generator.tflite import Model
 from code_generator.tflite.BuiltinOperator import BuiltinOperator
+from code_generator.tflite.Padding import Padding
 from code_generator.tflite.TensorType import TensorType
 
 
@@ -181,3 +182,44 @@ def get_nhwc_from_shape(shape):
     elif len(shape) == 1:
         c = shape[0]
     return n, h, w, c
+
+
+def fold_padding(op_name, padding_mode, input_tensor, window, stride, output_hw, tmpPADIndice):
+    """The tensor a windowed op really reads, its extent, and the padding it adds to each side.
+
+    A SAME op is padded the way tflite sizes it. A VALID op behind a PAD takes that PAD's padding
+    and reads the tensor before it, which is smaller by the padding. A VALID op with no PAD is not
+    padded. window, stride and output_hw are (h, w) pairs.
+
+    Returns (input_idx, input_h, input_w, (pad_t, pad_b, pad_l, pad_r)).
+    """
+    _, input_h, input_w, _ = get_nhwc_from_shape(input_tensor.tensor.ShapeAsNumpy())
+    input_idx = input_tensor.tensor_idx
+    fused_pad = (tmpPADIndice or {}).get(input_idx)
+    if padding_mode == Padding.SAME:
+        assert fused_pad is None, f"a PAD before the SAME {op_name} would pad its input twice"
+        pad_t, pad_b = _same_padding(input_h, window[0], stride[0], output_hw[0])
+        pad_l, pad_r = _same_padding(input_w, window[1], stride[1], output_hw[1])
+    elif fused_pad is not None:
+        input_idx = fused_pad.input_idx
+        pad_t, pad_b, pad_l, pad_r = fused_pad.pad_t, fused_pad.pad_b, fused_pad.pad_l, fused_pad.pad_r
+        input_h = input_h - (pad_t + pad_b)
+        input_w = input_w - (pad_l + pad_r)
+    else:
+        pad_t = pad_b = pad_l = pad_r = 0
+    # a pad as wide as the window would leave an output reading nothing but padding
+    assert max(pad_t, pad_b) < window[0] and max(pad_l, pad_r) < window[1], (
+        f"padding {(pad_t, pad_b, pad_l, pad_r)} against the {window[0]}x{window[1]} window of {op_name}"
+    )
+    return input_idx, input_h, input_w, (pad_t, pad_b, pad_l, pad_r)
+
+
+def _same_padding(extent, window, stride, output):
+    """The padding SAME puts before and after one axis.
+
+    SAME sizes the output at ceil(extent / stride) and pads by however far the last window
+    overruns the input. tflite puts the odd row of an odd total after, so a stride 2 3x3 conv
+    over an even extent pads (0, 1).
+    """
+    total = max((output - 1) * stride + window - extent, 0)
+    return total // 2, total - total // 2
