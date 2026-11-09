@@ -38,6 +38,8 @@ class TfliteConvertor(object):
         self.layer = []
         # every PAD folded into the op that reads it, by the tensor the PAD produces
         self.tmpPADIndice = dict()
+        # every RESHAPE folded away, by the tensor it produces; whatever reads it reads its input
+        self.folded_reshapes = dict()
         self.skip_transpose = None
         self.average_1D_to_2D_holder = MEAN2D()  # For merging 1D to 2D
 
@@ -92,6 +94,17 @@ class TfliteConvertor(object):
                 continue
 
             op = self.subgraph.Operators(i)
+
+            # A flatten that keeps the batch dynamic is SHAPE -> STRIDED_SLICE -> PACK -> RESHAPE. The first
+            # three only work out the new shape, so they are skipped and the RESHAPE is folded away.
+            if getOpCodeStr(op, self.model) == "SHAPE":
+                chain = [getOpCodeStr(self.subgraph.Operators(j), self.model) for j in range(i, min(i + 4, operators_len))]
+                assert chain == ["SHAPE", "STRIDED_SLICE", "PACK", "RESHAPE"], (
+                    f"op {i}: SHAPE starts {chain}, expected the flatten SHAPE, STRIDED_SLICE, PACK, RESHAPE"
+                )
+                skip_next_ops = 2
+                continue
+
             if i < operators_len - 2:
                 next_op = self.subgraph.Operators(i + 1)
                 next_next_op = self.subgraph.Operators(i + 2)
@@ -143,6 +156,7 @@ class TfliteConvertor(object):
     # handle one op and parse it into layers[] for supported operators
     def _handleOperator(self, op):
         op_code_str = getOpCodeStr(op, self.model)
+        layers_before = len(self.layer)
         if op_code_str == "CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
         elif op_code_str == "ADD":
@@ -169,10 +183,31 @@ class TfliteConvertor(object):
             self._convert_TRANSPOSE(op)
         elif op_code_str == "FULLY_CONNECTED":
             self.layer.append(TF_Parser.parse_fc(op, self.model))
+        elif op_code_str == "RESHAPE":
+            self._convert_RESHAPE(op)
         elif op_code_str in SKIP_OPs:
             pass
         else:
             raise NotImplementedError(f"Unsupported {op_code_str}")
+
+        # a layer reading a folded RESHAPE reads what the RESHAPE read
+        for layer in self.layer[layers_before:]:
+            self._read_through_folded_reshapes(layer)
+
+    def _read_through_folded_reshapes(self, layer):
+        for t in layer.input_tensors:
+            fold = self.folded_reshapes.get(t.graph_idx)
+            if fold is not None:
+                t.graph_idx = str(fold.input_idx)
+        for key in ("input_idx", "input2_idx"):
+            fold = self.folded_reshapes.get(str(layer.params.get(key)))
+            if fold is not None:
+                layer.params[key] = fold.input_idx
+
+    def _consumers(self, tensor_idx):
+        """The ops that read tensor_idx."""
+        ops = (self.subgraph.Operators(i) for i in range(self.subgraph.OperatorsLength()))
+        return [op for op in ops if tensor_idx in op.InputsAsNumpy()]
 
     #         -> MEAN -> MEAN -> PWCONV -> PWCONV -> | ADD -> MUL ->     |
     #  DWCONV                                        |            -> MUL |
@@ -228,6 +263,28 @@ class TfliteConvertor(object):
 
         # fuse pad into conv
         self.skip_transpose = SkipTensorIndices(input_tensor.tensor_idx, output_tensor.tensor_idx)
+
+    def _convert_RESHAPE(self, op):
+        input_tensor = get_input_tensors(op, self.model)[0]
+
+        output_tensors = get_output_tensors(op, self.model)
+        assert len(output_tensors) == 1, "output tensors length should be 1"
+        output_tensor = output_tensors[0]
+
+        # Folding the RESHAPE away is only sound where it moves no byte for whoever reads it: a
+        # FULLY_CONNECTED or a SOFTMAX reads the values in order, and a conv over a 1x1 input reads its
+        # channels as they lie. A RESHAPE nothing reads is the model's output, and goes as well.
+        for consumer in self._consumers(output_tensor.tensor_idx):
+            kind = getOpCodeStr(consumer, self.model)
+            if kind in ("CONV_2D", "DEPTHWISE_CONV_2D"):
+                _, h, w, _ = get_nhwc_from_shape(get_input_tensors(consumer, self.model)[0].tensor.ShapeAsNumpy())
+                assert h == w == 1, f"RESHAPE read by a {kind} over a {h}x{w} input, which it would reorder"
+            else:
+                assert kind in ("FULLY_CONNECTED", "SOFTMAX"), f"RESHAPE read by {kind}, which cannot read through it"
+
+        self.folded_reshapes[str(output_tensor.tensor_idx)] = SkipTensorIndices(
+            input_tensor.tensor_idx, output_tensor.tensor_idx
+        )
 
 
 class SkipTensorIndices(object):
