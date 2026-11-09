@@ -146,14 +146,6 @@ class BaseAllocator:
             rec["inplace_tensor_out_idx"] = inplace_tensor_out_idx
             rec["op_needs_right_shift"] = op_needs_right_shift
 
-    def getIdxAddress(self, idx):
-        target_rec = None
-        for rec in self.rectangles:
-            if rec["idx"] == idx:
-                target_rec = rec
-        assert target_rec is not None
-        return target_rec["placement"]
-
     def allocate(self):
         # place each rectangle
         print(f"Deriving the memory schedule for {len(self.rectangles)} activation tensors.")

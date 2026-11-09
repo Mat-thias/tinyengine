@@ -148,9 +148,6 @@ class tensor:
         self.dtype = dtype
         if FORCE_DTYPE is not None:
             self.dtype = FORCE_DTYPE
-        self.buffer_placement = None
-        self.buffer_name = None
-        self.buffer_address = None
         self.allocator_idx = None
         self.graph_idx = str(graph_idx)
         self.io = io

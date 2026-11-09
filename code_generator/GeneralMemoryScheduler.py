@@ -469,38 +469,6 @@ class GeneralMemoryScheduler:
             for cnt, t in enumerate(op.output_tensors):
                 assert t.allocator_idx is not None
 
-        # assign the address according to placement
-        for i, op in enumerate(self.layer):
-            # get all unallocated tensors for this layer
-            for cnt, t in enumerate(op.input_tensors):
-                if cnt == 0:
-                    op.params["input_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
-                    op.params["input_buf_add"] = "front"
-                elif cnt == 1:
-                    op.params["input2_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
-                    op.params["input2_buf_add"] = "front"
-                # elif cnt == 2:
-                #     op.params["input3_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
-                #     op.params["input3_buf_add"] = "front"
-                else:
-                    raise RuntimeError(
-                        f"Unexpected number of arguments {cnt} for {op}. "
-                        "We currently only support ops with at most 2 arguments."
-                    )
-                op.input_tensors[cnt].buffer_name = "buffer0"
-                op.input_tensors[cnt].buffer_address = self.allocator.getIdxAddress(t.allocator_idx)
-            for cnt, t in enumerate(op.output_tensors):
-                if cnt == 0:
-                    op.params["output_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
-                    op.params["output_buf_add"] = "front"
-                    op.output_tensors[cnt].buffer_name = "buffer0"
-                    op.output_tensors[cnt].buffer_address = self.allocator.getIdxAddress(t.allocator_idx)
-                if cnt == 1:
-                    op.params["output2_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
-                    op.params["output2_buf_add"] = "front"
-                    op.output_tensors[cnt].buffer_name = "buffer0"
-                    op.output_tensors[cnt].buffer_address = self.allocator.getIdxAddress(t.allocator_idx)
-
         # calculate peak mem
         self.peakmem = (
             self.allocator.get_peak() + self.buffers["im2col"] + self.buffers["kernel"]  # + self.buffers["trainable"]
