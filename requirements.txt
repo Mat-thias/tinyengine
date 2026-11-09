@@ -1,5 +1,6 @@
 flatbuffers
 matplotlib
 numpy
+pyomo
 torch
 torchvision
