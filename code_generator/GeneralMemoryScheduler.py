@@ -243,9 +243,13 @@ class GeneralMemoryScheduler:
                     params = op.params
 
                     # A patch holds its padding as rows/columns inside its own buffer, which the
-                    # kernel skips via pad_t/pad_b/pad_l/pad_r instead of reading past the edge,
-                    # so every tap lands in the buffer: padding 0 relative to it.
-                    padding = 0 if params.get("is_patch", False) else params["padding"]
+                    # patch kernel skips at run time instead of reading past the edge, so every
+                    # tap lands in the buffer: padding 0 relative to it.
+                    if params.get("is_patch", False):
+                        pad_t = pad_b = pad_l = pad_r = 0
+                    else:
+                        pad_t, pad_b = params["pad_t"], params["pad_b"]
+                        pad_l, pad_r = params["pad_l"], params["pad_r"]
 
                     # dilation is not set in the current implementation
                     gap = right_inplace_gap_dense_ext(
@@ -254,7 +258,8 @@ class GeneralMemoryScheduler:
                         hin=params["input_h"], win=params["input_w"],
                         s_h=params["stride_h"], s_w=params["stride_w"],
                         d_h=1, d_w=1,
-                        p_h=padding, p_w=padding,
+                        p_h=pad_t, p_h_after=pad_b,
+                        p_w=pad_l, p_w_after=pad_r,
                         load_input_receptive_field=True
                     )
                     # if it is not the last consumed, it must be preserved, hence not in place

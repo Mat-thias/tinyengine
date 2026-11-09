@@ -43,9 +43,11 @@ default_params = {
     # for fp implementation
     "float_max": "FLT_MAX",
     "float_min": "-FLT_MAX",
-    "padding": None,
-    "padding_h": None,
-    "padding_w": None,
+    # one value per side of the input: top, bottom, left, right
+    "pad_t": None,
+    "pad_b": None,
+    "pad_l": None,
+    "pad_r": None,
     "dilation_h": None,
     "dilation_w": None,
     # fof Q training

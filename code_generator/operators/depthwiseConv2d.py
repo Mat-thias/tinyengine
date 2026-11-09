@@ -8,7 +8,11 @@ default_params = {
     # op related
     "op": "DEPTHWISE_CONV_2D",
     "is_SEBlock": False,
-    "padding": None,
+    # one value per side of the input: top, bottom, left, right
+    "pad_t": None,
+    "pad_b": None,
+    "pad_l": None,
+    "pad_r": None,
     "stride_h": None,
     "stride_w": None,
     "input_idx": None,
@@ -41,8 +45,6 @@ default_params = {
     "multiplier": None,
     "shift": None,
     # for fp implementation
-    "padding_h": None,
-    "padding_w": None,
     "dilation_h": None,
     "dilation_w": None,
     "float_max": "FLT_MAX",
@@ -110,7 +112,7 @@ class DepthwiseConv2d(basicOperator):
     def get_sbuf_size(self) -> int:
         p = self.params
         if self.USE_INPLACE:
-            return 2 * (p["input_h"] + 2 * p["padding"]) * (p["input_w"] + 2 * p["padding"])  # 2 x resolution
+            return 2 * (p["input_h"] + p["pad_t"] + p["pad_b"]) * (p["input_w"] + p["pad_l"] + p["pad_r"])  # 2 x resolution
         else:
             return 2 * p["kernel_h"] * p["kernel_w"] * p["input_c"]  # 16 bit
 

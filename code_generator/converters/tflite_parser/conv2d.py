@@ -85,16 +85,17 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
     # quantized inference, used for requantize
     multiplier, shift = getMultiplierShift(effective_scale)
 
+    # every side is taken as padded by half the kernel along its axis
+    pad_t = pad_b = math.floor(kernel_h / 2)
+    pad_l = pad_r = math.floor(kernel_w / 2)
+
     # find previous layer and redirct the index and fuse pad into conv
-    if tmpPADIndice is not None:
-        if tmpPADIndice.output_idx == input_tensor.tensor_idx:
-            input_idx = tmpPADIndice.input_idx
-            input_h = input_h - math.floor(kernel_h / 2) * 2
-            input_w = input_w - math.floor(kernel_h / 2) * 2
-        else:
-            input_idx = input_tensor.tensor_idx
-    else:
-        input_idx = input_tensor.tensor_idx
+    input_idx = input_tensor.tensor_idx
+    if tmpPADIndice is not None and tmpPADIndice.output_idx == input_tensor.tensor_idx:
+        input_idx = tmpPADIndice.input_idx
+        # the conv reads the tensor from before the PAD, which is smaller by the padding
+        input_h = input_h - (pad_t + pad_b)
+        input_w = input_w - (pad_l + pad_r)
 
     params = {
         # operator
@@ -102,7 +103,10 @@ def parse_conv2d(op, model: Model.Model, tmpPADIndice=None):
         # conv
         "kernel_h": kernel_h,
         "kernel_w": kernel_w,
-        "padding": math.floor(kernel_h / 2),
+        "pad_t": pad_t,
+        "pad_b": pad_b,
+        "pad_l": pad_l,
+        "pad_r": pad_r,
         "stride_h": stride_h,
         "stride_w": stride_w,
         # tensor

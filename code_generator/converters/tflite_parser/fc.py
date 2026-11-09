@@ -90,7 +90,10 @@ def parse_fc(op, model: Model.Model):
         "kernel_h": 1,
         "kernel_w": 1,
         # needed for campatablily with conv
-        "padding": 0,
+        "pad_t": 0,
+        "pad_b": 0,
+        "pad_l": 0,
+        "pad_r": 0,
         "stride_h": 1,
         "stride_w": 1,
         # trainable parameters
