@@ -272,13 +272,9 @@ class GeneralMemoryScheduler:
                     )
                     # if it is not the last consumed, it must be preserved, hence not in place
                 elif isinstance(op, depthwiseConv2d.DepthwiseConv2d):
-                    assert t.is_last_consumed, (
-                        f"only the inplace variant of {op.__class__.__name__} has been implemented but "
-                        f"its input tensor {t.graph_idx} is still needed by a future layer, so inplace "
-                        "is not possible"
-                    )
-                    # For a naive/dual-buffer comparison schedule only
-                    if self.inplace_mode == InplaceMode.depthwise_only:
+                    # A depthwise whose input a later layer still reads is placed out of place, as any
+                    # other op is. depthwise_only mode forces in place only the inputs nothing reads later.
+                    if self.inplace_mode == InplaceMode.depthwise_only and t.is_last_consumed:
                         t.inplace = op.params["inplace"]
                 elif isinstance(op, upsample.upSample):
                     assert op.params["factor"].is_integer(), \
