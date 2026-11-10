@@ -117,9 +117,10 @@ class TfliteConvertor(object):
                     next_op_str = getOpCodeStr(next_op, self.model) 
                     next_next_op_str = getOpCodeStr(next_next_op, self.model)
 
-                    if prev_op_str != "MEAN":
-                        # Only a MEAN,MEAN pair is supported: parse_mead1dto2d holds the
-                        # first and emits nothing, the second builds the avgpool.
+                    # A MEAN over H and W is a whole global average pool on its own. Any other
+                    # MEAN must come as a pair: parse_mead1dto2d holds the first and emits
+                    # nothing, the second builds the avgpool.
+                    if prev_op_str != "MEAN" and TF_Parser.mean_axes(op, self.model) != {1, 2}:
                         assert next_op_str == "MEAN", (
                             f"op {i} MEAN is followed by {next_op_str}, expected MEAN; a lone MEAN "
                             "emits no layer and its held shape would pair with the next one in the graph"
@@ -171,7 +172,9 @@ class TfliteConvertor(object):
             self.layer.append(TF_Parser.parse_upsample(op, self.model))
         elif op_code_str == "MAX_POOL_2D":
             self.layer.append(TF_Parser.parse_maxpool(op, self.model, self.tmpPADIndice))
-        elif op_code_str in "MEAN":
+        elif op_code_str == "MEAN" and TF_Parser.mean_axes(op, self.model) == {1, 2}:
+            self.layer.append(TF_Parser.parse_mean(op, self.model))
+        elif op_code_str == "MEAN":
             ret_op = TF_Parser.parse_mead1dto2d(op, self.model, self.average_1D_to_2D_holder)
             if ret_op is not None:
                 # TODO: This only handle a specific graph: TRANSPOSE -> MEAN -> MEANS
