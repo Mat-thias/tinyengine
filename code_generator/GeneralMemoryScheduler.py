@@ -16,6 +16,7 @@
 # Target ISA:  ARMv7E-M
 # ----------------------------------------------------------------------
 
+import math
 import sys
 from enum import Enum
 from collections import defaultdict
@@ -70,7 +71,7 @@ class GeneralMemoryScheduler:
         layer,
         tflite_op=False,
         dummy_address=False,
-        memory_limit=10 * 1024 * 1024,
+        memory_limit=math.inf,
         inplace=True,
         outputTables=None,
         mem_visual_path="codegen/allocation.png",
