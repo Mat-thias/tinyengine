@@ -21,7 +21,7 @@ import logging
 import code_generator.converters.tflite_parser as TF_Parser
 from code_generator.converters.tflite_parser.mean1dto2d import MEAN2D
 from code_generator.converters.tflite_parser.utils import (
-    get_input_tensors, get_nhwc_from_shape, get_np_from_wrapper, get_output_tensors, getOpCodeStr
+    get_input_tensors, get_nhwc_from_shape, get_np_from_wrapper, get_output_tensors, getOpCodeStr, is_constant
 )
 
 from .constant import SKIP_OPs
@@ -160,8 +160,11 @@ class TfliteConvertor(object):
         layers_before = len(self.layer)
         if op_code_str == "CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
-        elif op_code_str == "ADD":
+        elif op_code_str == "ADD" and not any(is_constant(t) for t in get_input_tensors(op, self.model)):
+            # two activations of one shape, which main's Add places in place
             self.layer.append(TF_Parser.parse_add(op, self.model))
+        elif op_code_str in ("ADD", "SUB", "MUL"):
+            self.layer.append(TF_Parser.parse_elementwise(op, self.model))
         elif op_code_str == "AVERAGE_POOL_2D":
             self.layer.append(TF_Parser.parse_avgpool(op, self.model, self.tmpPADIndice))
         elif op_code_str == "DEPTHWISE_CONV_2D":
@@ -186,8 +189,6 @@ class TfliteConvertor(object):
             self._convert_TRANSPOSE(op)
         elif op_code_str == "FULLY_CONNECTED":
             self.layer.append(TF_Parser.parse_fc(op, self.model))
-        elif op_code_str == "MUL":
-            self.layer.append(TF_Parser.parse_mul(op, self.model))
         elif op_code_str == "RESHAPE":
             self._convert_RESHAPE(op)
         elif op_code_str == "SOFTMAX":
