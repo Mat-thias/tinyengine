@@ -52,6 +52,11 @@ def get_np_from_wrapper(wrapper):
     return np.frombuffer(data, dtype=dtype).reshape(shape)
 
 
+def is_constant(wrapper):
+    """True for a tensor the model stores, such as a weight, rather than one a layer produces."""
+    return wrapper.buffer.DataLength() > 0
+
+
 def get_input_tensors(op, model: Model.Model):
     return _get_wrapper_tensors(op.InputsAsNumpy(), model)
 
