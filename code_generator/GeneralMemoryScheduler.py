@@ -39,7 +39,7 @@ from .constant import (
     TTYPE_TRAINING_WEIGHTS,
 )
 
-from .operators import add, avgpool2d, conv2d, depthwiseConv2d, maxpool2d, upsample, se_element_mult
+from .operators import add, avgpool2d, conv2d, depthwiseConv2d, maxpool2d, place_holder, upsample, se_element_mult
 from .operators.basic_utils import op_inplace_type, tensor_io, InplaceMode, RightShift
 
 # NOTE: Currently only supports ops a single output
@@ -50,12 +50,18 @@ INPLACE_OPS_INPUT_GROUPING = {
         conv2d.Conv2d,
         depthwiseConv2d.DepthwiseConv2d,
         maxpool2d.maxPool2d,
+        place_holder.SingleInputPlaceHolderOp,
         upsample.upSample
     ),
     2: (
         add.Add,
+        place_holder.DoubleInputPlaceHolderOp,
         se_element_mult.SEelementmult
-    )
+    ),
+    # any number of inputs
+    -1: (
+        place_holder.NInputPlaceHolderOp,
+    ),
 }
 
 class GeneralMemoryScheduler:
@@ -214,6 +220,8 @@ class GeneralMemoryScheduler:
             # Determines if the allocator should factor in the right_shift of ignore it
             # it ignores it for most layers except conv currently
             t.op_needs_right_shift = op.params["op_needs_right_shift"]
+            # the layer reading t, so the copies of one tensor can tell which layer reads them
+            t.op = op
 
             # aligning the memory so the memmove operation is not fragmented which speeds it up
             t.gap = 0 if t.inplace == op_inplace_type.force_not_inplace else \
@@ -292,6 +300,11 @@ class GeneralMemoryScheduler:
                 t2.is_last_consumed = is_layer_last_consumer_of_tensor(i, t2)
                 tensor_inplace_parameters_in(t1, op, gap1)
                 tensor_inplace_parameters_in(t2, op, gap2)
+
+            elif isinstance(op, INPLACE_OPS_INPUT_GROUPING[-1]):
+                for t in op.input_tensors:
+                    t.is_last_consumed = is_layer_last_consumer_of_tensor(i, t)
+                    tensor_inplace_parameters_in(t, op, gap=0)
 
             else:
                 raise AttributeError(f"Unaccounted Layerr {op} {op.params['op']}")
@@ -424,7 +437,8 @@ class GeneralMemoryScheduler:
             assert graph_idx == graph_idx_, f"graph tree is malformed"
 
             last_consumed_t = [t for t in tensors if t.is_last_consumed]
-            assert len(last_consumed_t) <= 1, "Only one tensor should be the last, graph malformed"
+            # one layer reads a tensor last, but it may read it twice, as NASNet's ADD(x, x) does
+            assert len({id(t.op) for t in last_consumed_t}) <= 1, "Only one layer should read a tensor last, graph malformed"
             try: last_consumed_t = last_consumed_t[0]
             except IndexError: last_consumed_t = None
             for t in tensors:
