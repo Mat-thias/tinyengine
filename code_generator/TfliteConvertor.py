@@ -165,6 +165,8 @@ class TfliteConvertor(object):
             self.layer.append(TF_Parser.parse_add(op, self.model))
         elif op_code_str in ("ADD", "SUB", "MUL"):
             self.layer.append(TF_Parser.parse_elementwise(op, self.model))
+        elif op_code_str in TF_Parser.ACTIVATIONS:
+            self.layer.append(TF_Parser.parse_activation(op, self.model))
         elif op_code_str == "AVERAGE_POOL_2D":
             self.layer.append(TF_Parser.parse_avgpool(op, self.model, self.tmpPADIndice))
         elif op_code_str == "DEPTHWISE_CONV_2D":

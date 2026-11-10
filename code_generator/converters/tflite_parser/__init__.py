@@ -1,3 +1,4 @@
+from .activation import ACTIVATIONS, parse_activation
 from .add import parse_add
 from .avgpool import parse_avgpool
 from .conv2d import parse_conv2d
