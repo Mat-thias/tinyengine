@@ -648,6 +648,18 @@ class MILPAllocator(BaseAllocator):
         else:
             solver = pyo.SolverFactory(SOLVER, executable=os.path.join(SOLVER_PATH, SOLVER))
 
+        if SOLVER == "scip":
+            # pyomo hands options to the AMPL SCIP driver in an environment variable named
+            # after options.solver, which it leaves None, so they would land in None_options
+            # and never be read.
+            solver.options.solver = SOLVER
+            # SCIP takes a row as met while it is off by no more than feastol times the
+            # row's magnitude. A no_spatial_overlap_rule row is as large as M, so at the
+            # default 1e-6 two live tensors could share up to M / 10^6 bytes, 12 of them
+            # on EfficientNetV2B0. Every quantity here is a whole number of bytes, so a
+            # tolerance of a tenth of a byte at M holds every row exactly. M is Z's bound.
+            solver.options["feastol"] = min(1e-6, 0.1 / model.largest_space_in_memory.ub)
+
         results = solver.solve(model, tee=False)
         # Check before reading the variables: an unsolved model leaves every
         # placement at None, which would surface as a TypeError from int(None)
