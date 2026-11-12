@@ -1,6 +1,7 @@
 from .activation import ACTIVATIONS, parse_activation
 from .add import parse_add
 from .avgpool import parse_avgpool
+from .concatenation import parse_concatenation
 from .conv2d import parse_conv2d
 from .elementwise import parse_elementwise
 from .fc import parse_fc
