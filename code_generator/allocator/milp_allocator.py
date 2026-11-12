@@ -39,8 +39,9 @@ Constants, off the rectangle t unless noted
                                         below its input (conv) or shares the
                                         base with it (add, depthwise, upsample)
     N           local, from align_to_n_bytes     address alignment, (defualt: 4)
-    M           local                   address big-M, the smaller of the SRAM
-                                        and every rectangle stacked end to end
+    M           local                   address big-M, the smallest of the SRAM,
+                                        every rectangle stacked end to end and
+                                        FirstFit's peak
     L           local                   layer big-M, the last end
     C           self.RIGHT_SHIFT_COST   bytes of peak a byte of memmove is worth
     c           self.INPLACE_COST       bytes of peak a byte overwritten in place is worth
@@ -98,6 +99,13 @@ SRAM limit is the obvious candidate and the wrong one: it is a user setting, so
 it can be fifty times any address the model will ever use, and a slack constant
 that loose flattens the relaxation until the solver starts returning solutions
 well off the optimum and reporting lower == upper on them, which reads as proof.
+Every rectangle stacked end to end is a schedule, so no address needs to pass
+their sum, but on the keras.applications models that sum is up to 33 times the
+peak. FirstFit's layout is a schedule too, and its peak is usually the optimum
+itself and at most 1.51 times it on the models tested, so M is the smallest of
+the three. FirstFit can decline an input forced in place, which this model
+cannot; the optimum may then lie above FirstFit's peak, the model is infeasible,
+and it is solved again without it.
 
 Whether two tensors are alive together is itself a decision, because a candidate
 dies where its output begins only if that aliasing happens. So e_t is a variable,
@@ -167,11 +175,13 @@ optimize_inplace_flexible=False adds not_inplace_flexible_rule, pinning each
 candidate's lifetime to the aliased one so no op may decline its buffer.
 """
 
-import os
 import itertools
+import math
+import os
 import pyomo.environ as pyo
 
 from .base_allocator import BaseAllocator
+from .firstFit import FirstFit
 from ..operators.basic_utils import op_inplace_type, RightShift
 
 __all__ = ["MILPAllocator"]
@@ -209,14 +219,24 @@ class MILPAllocator(BaseAllocator):
         self.INPLACE_COST = INPLACE_COST
         self.RIGHT_SHIFT_COST = RIGHT_SHIFT_COST
 
-    def define_model(self):
+    def first_fit_peak(self):
+        """FirstFit's peak over copies of the rectangles, with no memory limit so it always places them."""
+        first_fit = FirstFit(math.inf, align_to_n_bytes=self.align_to_n_bytes)
+        first_fit.rectangles = [dict(rec) for rec in self.rectangles]
+        first_fit.allocate()
+        return first_fit.get_peak()
+
+    def define_model(self, bound_by_first_fit=True):
         """Build the model above over self.rectangles. See module docstring for notation."""
         N = self.align_to_n_bytes
 
         # Every rectangle stacked end to end is itself a schedule, so no address can
-        # be higher, and nothing may exceed the SRAM either. See the module docstring
-        # for why this is not just the SRAM limit.
+        # be higher, and nothing may exceed the SRAM either. FirstFit's layout is a
+        # schedule too, and a far lower one. See the module docstring for why this is
+        # not just the SRAM limit.
         M = min(self.SRAM, sum(rec["size"] + rec.get("gap", 0) for rec in self.rectangles))
+        if bound_by_first_fit:
+            M = min(M, self.first_fit_peak())
         # The layer big-M. No lifetime reaches past the last end, so e_t1 - start_t2
         # can never exceed it and this is enough to switch a temporal row off.
         L = max(rec["end"] for rec in self.rectangles)
@@ -661,6 +681,16 @@ class MILPAllocator(BaseAllocator):
             solver.options["feastol"] = min(1e-6, 0.1 / model.largest_space_in_memory.ub)
 
         results = solver.solve(model, tee=False)
+        if results.solver.termination_condition == pyo.TerminationCondition.infeasible:
+            # Infeasible under FirstFit's peak means FirstFit took a layout this model
+            # forbids, so its peak cannot serve as M. Solve again without it, at the
+            # tolerance for the looser M.
+            loose_model = self.define_model(bound_by_first_fit=False)
+            if loose_model.largest_space_in_memory.ub > model.largest_space_in_memory.ub:
+                model = loose_model
+                if SOLVER == "scip":
+                    solver.options["feastol"] = min(1e-6, 0.1 / model.largest_space_in_memory.ub)
+                results = solver.solve(model, tee=False)
         # Check before reading the variables: an unsolved model leaves every
         # placement at None, which would surface as a TypeError from int(None)
         # rather than the real cause. Infeasible normally means two constraints
