@@ -9,4 +9,5 @@ from .maxpool import parse_maxpool
 from .mean import mean_axes, parse_mean
 from .mean1dto2d import parse_mead1dto2d
 from .SEelement import parse_SEelement
+from .strided_slice import parse_strided_slice
 from .upsample import parse_upsample

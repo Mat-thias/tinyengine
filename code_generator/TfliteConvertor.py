@@ -169,6 +169,9 @@ class TfliteConvertor(object):
             self.layer.append(TF_Parser.parse_activation(op, self.model))
         elif op_code_str == "CONCATENATION":
             self.layer.append(TF_Parser.parse_concatenation(op, self.model))
+        elif op_code_str == "STRIDED_SLICE":
+            # the flatten's STRIDED_SLICE is skipped with its SHAPE, so this one crops
+            self.layer.append(TF_Parser.parse_strided_slice(op, self.model, self.tmpPADIndice))
         elif op_code_str == "AVERAGE_POOL_2D":
             self.layer.append(TF_Parser.parse_avgpool(op, self.model, self.tmpPADIndice))
         elif op_code_str == "DEPTHWISE_CONV_2D":
