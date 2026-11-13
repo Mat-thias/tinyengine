@@ -19,6 +19,7 @@
 #include "arm_nnsupportfunctions.h"
 #include "tinyengine_lib.h"
 #include "tinyengine_function.h"
+#include "unaligned_word_access.h"
 
 q7_t* mat_mult_kernel_s8_s16_reordered_ch48_fpreq(const q7_t *input_a,
 		const q15_t *input_b, const uint16_t output_ch, const float *scales,
@@ -1848,15 +1849,17 @@ q7_t* mat_mult_kernel3_input3_s8_s16_fpreq(const q7_t *input_a,
 		/* setup pointers for B */
 		const q15_t *ip_b0 = input_b;
 		const q15_t *ip_b1 = ip_b0 + num_col_a;
-		const q31_t *ip31_b0 = (q31_t *)ip_b0;
-		const q31_t *ip31_b1 = (q31_t *)ip_b1;
+		const te_q31_unaligned_t *ip31_b0 = (te_q31_unaligned_t *)ip_b0;
+		const te_q31_unaligned_t *ip31_b1 = (te_q31_unaligned_t *)ip_b1;
 		const float scale_0 = scales[0];
 		const float scale_1 = scales[1];
 
 		/* align the second pointer for A */
+		/* ksrc + 27 advances a q15_t pointer by an odd count, so ksrc2 is
+		 * always two bytes off a word boundary -- see unaligned_word_access.h */
 		const q15_t *ksrc2 = ksrc + 27;
-		q31_t *ksrc_31 = (q31_t *)ksrc;
-		q31_t *ksrc2_31 = (q31_t *)ksrc2;
+		te_q31_unaligned_t *ksrc_31 = (te_q31_unaligned_t *)ksrc;
+		te_q31_unaligned_t *ksrc2_31 = (te_q31_unaligned_t *)ksrc2;
 
 		/* Init accumulator with bias for channel N and N + 1 */
 		q31_t ch_0_out_0 = *bias;

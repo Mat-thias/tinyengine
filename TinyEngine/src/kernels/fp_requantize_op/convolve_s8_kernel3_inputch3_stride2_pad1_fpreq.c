@@ -21,6 +21,7 @@
 #include "arm_nnsupportfunctions.h"
 #include "img2col_element.h"
 #include "tinyengine_function.h"
+#include "unaligned_word_access.h"
 #include "right_inplace.h"
 
 tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
@@ -183,7 +184,9 @@ tinyengine_status convolve_s8_kernel3_inputch3_stride2_pad1_fpreq(
 			} else {						// first row is padded
 											//3x3 = 9 elements
 				*dst++ = pad_out;
-				q31_t *dst_31 = (q31_t *)dst;
+				/* one q15_t was just written, so dst is two bytes off a word
+				 * boundary -- see unaligned_word_access.h */
+				te_q31_unaligned_t *dst_31 = (te_q31_unaligned_t *)dst;
 				*dst_31++ = pad_out_q15x2;
 				*dst_31++ = pad_out_q15x2;
 				*dst_31++ = pad_out_q15x2;
