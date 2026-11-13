@@ -647,7 +647,7 @@ class MILPAllocator(BaseAllocator):
         super().allocate()
 
         model = self.define_model()
-        solver = pyo.SolverFactory(SOLVER, executable=os.path.join(SOLVER_PATH, SOLVER))
+        solver = pyo.SolverFactory(SOLVER, executable=os.path.join(SOLVER_PATH, SOLVER) if SOLVER_PATH else None)
 
         results = solver.solve(model, tee=False)
         # Check before reading the variables: an unsolved model leaves every
