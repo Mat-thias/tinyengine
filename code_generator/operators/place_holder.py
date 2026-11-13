@@ -16,8 +16,9 @@ default_params = {
     "output_c": None,
     "input_dtype": "int8",
     "output_dtype": "int8",
-    # Nothing is known about a layer with no kernel, so it is never assumed to overwrite what it
-    # reads: it always gets an output buffer of its own, as in dual buffer mode.
+    # Nothing is known about a layer with no kernel, so it is not assumed to overwrite what it
+    # reads: it gets an output buffer of its own, as in dual buffer mode, unless its parser says
+    # the op is element-wise (flexible_inplace).
     "inplace": op_inplace_type.force_not_inplace,
     "op_needs_right_shift": False,
     "color": "#d9d9d9",  # grey, unless the parser picks one
@@ -28,18 +29,23 @@ class _PlaceHolderOp(basicOperator):
     """An op with no operator class of its own, scheduled from the tensors it reads and writes.
 
     Its lifetimes and sizes are worked out like any other layer's, and it is drawn in the
-    lifecycle plot. No kernel for it exists in this tree, so its output never shares memory with
-    its inputs; a parser may pick its colour but not how it is placed.
+    lifecycle plot. No kernel for it exists in this tree, so its output gets memory of its own
+    unless its parser marks the op element-wise: each output element then reads only the input
+    elements at its own index, so any kernel that reads an index before writing it can overwrite
+    an input of the output's shape. The parser may say flexible_inplace for such an op, never
+    force_inplace, and nothing it places is shifted.
 
     The variants differ only in how many tensors they read, which decides the group the
     scheduler places them in.
     """
 
     def __init__(self, params: dict) -> None:
-        assert not {"inplace", "op_needs_right_shift"} & params.keys(), (
-            f"{params.get('op')}: a placeholder is always placed apart from its inputs, so its parser "
-            "cannot set inplace or op_needs_right_shift"
+        assert "op_needs_right_shift" not in params, (
+            f"{params.get('op')}: a placeholder never shifts its output, so its parser cannot set op_needs_right_shift"
         )
+        assert params.get("inplace", op_inplace_type.force_not_inplace) in (
+            op_inplace_type.force_not_inplace, op_inplace_type.flexible_inplace
+        ), f"{params.get('op')}: a placeholder may let an input be overwritten, never require it"
         self.params = deep_copy_dicts(default_params)
         self.params.update(self._input_default_params())
         # every key the parser gives is kept, not only the ones declared above

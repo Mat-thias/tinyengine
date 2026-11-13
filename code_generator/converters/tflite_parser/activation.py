@@ -1,4 +1,5 @@
 from code_generator.operators import place_holder
+from code_generator.operators.basic_utils import op_inplace_type
 from code_generator.tflite import Model
 
 from .utils import get_input_tensors, get_nhwc_from_shape, get_output_tensors, getOpCodeStr, getTensorTypeStr
@@ -40,5 +41,7 @@ def parse_activation(op, model: Model.Model):
         "output_c": output_c,
         "input_dtype": dtype,
         "output_dtype": dtype,
+        # element-wise over one tensor of the output's shape, so it can overwrite its input
+        "inplace": op_inplace_type.flexible_inplace,
         "color": "#d9d9d9",  # grey
     })

@@ -1,4 +1,5 @@
 from code_generator.operators import place_holder
+from code_generator.operators.basic_utils import op_inplace_type
 from code_generator.tflite import Model
 
 from .utils import get_input_tensors, get_nhwc_from_shape, get_output_tensors, getOpCodeStr, getTensorTypeStr, is_constant
@@ -52,8 +53,15 @@ def parse_elementwise(op, model: Model.Model):
         "color": COLORS[op_name],
     }
     if is_constant(input2_tensor):
+        # element-wise over one tensor of the output's shape, so it can overwrite its input
+        params["inplace"] = op_inplace_type.flexible_inplace
         return place_holder.SingleInputPlaceHolderOp(params)
 
+    # Either operand may be overwritten only if both have the output's shape: a broadcast one is
+    # read again for every pixel, so writing the output over it destroys it while it is still
+    # needed, and the scheduler offers both operands alike.
+    if (input2_h, input2_w, input2_c) == (input_h, input_w, input_c):
+        params["inplace"] = op_inplace_type.flexible_inplace
     params.update({
         "input2_idx": input2_tensor.tensor_idx,
         "input2_dim": 3,
