@@ -210,7 +210,9 @@ void update_SGD(float learning_rate){\n"""
             )
             # generate code for testing whole inference time
             string += (
-                """void end2endinference(q7_t* img){
+                """void invoke_1patch(uint16_t pad_t, uint16_t pad_b, uint16_t pad_l ,uint16_t pad_r);
+
+void end2endinference(q7_t* img){
     //stage 1
     int i, j, h, w, c;
     for (i = 0; i < """

@@ -200,6 +200,38 @@ tinyengine_status element_mult_nx1(const q7_t *input, const uint16_t input_h, co
                                    const int32_t out_activation_min, const int32_t out_activation_max,
                                    const float output_scale, q7_t *output);
 
+// Matmul helpers the int conv kernels call. They return a pointer, so an implicit int declaration truncates
+// it on a 64-bit host, and GCC 14 rejects implicit declarations outright.
+q7_t *arm_nn_mat_mult_kernel3_input3_s8_s16(const q7_t *input_a, const q15_t *input_b, const uint16_t output_ch,
+                                            const int32_t *out_shift, const int32_t *out_mult,
+                                            const int32_t out_offset, const int16_t activation_min,
+                                            const int16_t activation_max, const uint16_t num_col_a,
+                                            const int32_t *const output_bias, q7_t *out_0, q15_t *kbuf);
+
+q7_t *mat_mult_kernel_s8_s16_reordered_ch8(const q7_t *input_a, const q15_t *input_b, const uint16_t output_ch,
+                                           const int32_t *out_shift, const int32_t *out_mult,
+                                           const int32_t out_offset, const int16_t activation_min,
+                                           const int16_t activation_max, const uint16_t num_col_a,
+                                           const int32_t *const output_bias, q7_t *out_0);
+
+q7_t *mat_mult_kernel_s8_s16_reordered_ch16(const q7_t *input_a, const q15_t *input_b, const uint16_t output_ch,
+                                            const int32_t *out_shift, const int32_t *out_mult,
+                                            const int32_t out_offset, const int16_t activation_min,
+                                            const int16_t activation_max, const uint16_t num_col_a,
+                                            const int32_t *const output_bias, q7_t *out_0);
+
+q7_t *mat_mult_kernel_s8_s16_reordered_ch24(const q7_t *input_a, const q15_t *input_b, const uint16_t output_ch,
+                                            const int32_t *out_shift, const int32_t *out_mult,
+                                            const int32_t out_offset, const int16_t activation_min,
+                                            const int16_t activation_max, const uint16_t num_col_a,
+                                            const int32_t *const output_bias, q7_t *out_0);
+
+q7_t *mat_mult_kernel_s8_s16_reordered_ch48(const q7_t *input_a, const q15_t *input_b, const uint16_t output_ch,
+                                            const int32_t *out_shift, const int32_t *out_mult,
+                                            const int32_t out_offset, const int16_t activation_min,
+                                            const int16_t activation_max, const uint16_t num_col_a,
+                                            const int32_t *const output_bias, q7_t *out_0);
+
 #include "fp_requantize_op.h"
 #include "genInclude.h"
 //#include "int8_bp_op.h"
