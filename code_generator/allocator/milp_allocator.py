@@ -44,7 +44,8 @@ Constants, off the rectangle t unless noted
                                         FirstFit's peak
     L           local                   layer big-M, the last end
     C           self.RIGHT_SHIFT_COST   bytes of peak a byte of memmove is worth
-    c           self.INPLACE_COST       bytes of peak a byte overwritten in place is worth
+    c           self.INPLACE_COST       bytes of peak a byte overwritten in place is worth,
+                                        capped per model so sum_i c size_i <= 0.5
 
 Decisions
 ---------
@@ -196,7 +197,8 @@ SOLVER_PATH = os.environ.get("TINYENGINE_MILP_SOLVER_PATH")
 # more. Raise it to trade peak for fewer copies, lower it for the reverse.
 RIGHT_SHIFT_COST = 1e-4
 # What a byte overwritten in place is worth in bytes of peak, so among layouts of the
-# same peak the one aliasing the most is taken. Kept small: no MCUNet peak moved.
+# same peak the one aliasing the most is taken. define_model() lowers it per model so
+# aliasing every candidate is worth under one byte, and it can never raise the peak.
 INPLACE_COST = 1e-5
 
 
@@ -638,8 +640,11 @@ class MILPAllocator(BaseAllocator):
         model.force_inplace_tensor_decision_in_rule_constraint = pyo.ConstraintList(rule=force_inplace_tensor_decision_in_rule(model, model.potential_inplace_tensors_in))
 
         # model objective, the largest space in memory touched
+        # A peak moves by whole bytes, so keeping the whole reward under 1 makes it only break ties
+        candidate_bytes = sum(self.rectangles[i]["size"] for i in model.potential_inplace_tensors_in)
+        inplace_cost = min(self.INPLACE_COST, 0.5 / max(candidate_bytes, 1))
         inplace_tensor_cost = pyo.quicksum([
-            self.INPLACE_COST * model.decision_inplace_tensor_in[i]
+            inplace_cost * model.decision_inplace_tensor_in[i]
             * self.rectangles[i]["size"]
             for i in model.potential_inplace_tensors_in
         ])
