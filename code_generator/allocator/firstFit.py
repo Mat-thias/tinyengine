@@ -129,10 +129,10 @@ class FirstFit(BaseAllocator):
         for _, rec in enumerate(self.rectangles):
             if rec["placement"] != -1:  # this each placed rectangle
                 if (
-                    start < rec["start"] < end
-                    or start < rec["end"] < end
-                    or rec["start"] < start < rec["end"]
-                    or rec["start"] < end < rec["end"]
+                    start <= rec["start"] < end
+                    or start < rec["end"] <= end
+                    or rec["start"] <= start < rec["end"]
+                    or rec["start"] < end <= rec["end"]
                 ):  # overlap with the insert block
                     # placement of the rectatngle
                     y0 = rec["placement"]
