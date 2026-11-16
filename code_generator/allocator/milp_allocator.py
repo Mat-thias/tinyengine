@@ -192,9 +192,10 @@ __all__ = ["MILPAllocator"]
 SOLVER = os.environ.get("TINYENGINE_MILP_SOLVER", "scip")
 SOLVER_PATH = os.environ.get("TINYENGINE_MILP_SOLVER_PATH")
 
-# What a byte of memmove is worth in bytes of peak. At 1e-4 a 154,880 byte copy
-# prices at ~15 bytes, so the shift is taken unless placing the output low saves
-# more. Raise it to trade peak for fewer copies, lower it for the reverse.
+# What a byte of memmove is worth in bytes of peak. Unlike INPLACE_COST this is a real
+# cost, not a tie-break: at 1e-4 a 154,880 byte copy is taken only if it lowers the peak
+# by more than ~15 bytes, so the peak can sit above the lowest one by at most C times the
+# bytes the lowest-peak layout moves. Raise it for fewer copies, lower it for less peak.
 RIGHT_SHIFT_COST = 1e-4
 # What a byte overwritten in place is worth in bytes of peak, so among layouts of the
 # same peak the one aliasing the most is taken. define_model() lowers it per model so
