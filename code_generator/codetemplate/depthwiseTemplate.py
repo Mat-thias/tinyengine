@@ -545,14 +545,15 @@ class depthwiseInplace:
         retString += "    #define STRIDE " + str(self.stride) + "\n"
         retString += "    int i, j;\n"
 
-        # initialize accumulators as bias
+        # initialize accumulators as bias; biasR, the part of the folded bias int32 cannot hold, is added once
+        # after the MACs, which may bring the sum back into range
         retString += """    /* MACs for each output */
     for (i = 0; i < output_y; i++) {
         for (j = 0; j < output_x / 2; j++) {
             q7_t *cols_8b = cols_8b_iterptr;
 
-            q31_t sum0 = bias[0] + biasR[0];
-            q31_t sum1 = bias[0] + biasR[0];
+            q31_t sum0 = bias[0];
+            q31_t sum1 = bias[0];
             """
         # computation
         retString += """
@@ -563,13 +564,13 @@ class depthwiseInplace:
         if self.fp_requantize:
             retString += """
             /* requantize */
-            sum0 = (float) sum0 * *scales;
+            sum0 = (float) (sum0 + biasR[0]) * *scales;
             sum0 += output_offset;
             sum0 = TN_MAX(sum0, activation_min);
             sum0 = TN_MIN(sum0, activation_max);
             output[(i * output_x + j * 2) * channel_offset] = sum0;
 
-            sum1 = (float) sum1 * *scales;
+            sum1 = (float) (sum1 + biasR[0]) * *scales;
             sum1 += output_offset;
             sum1 = TN_MAX(sum1, activation_min);
             sum1 = TN_MIN(sum1, activation_max);
@@ -600,13 +601,13 @@ class depthwiseInplace:
         # left over for odd dimension
         retString += """if (output_x & 1) {
             q7_t * cols_8b = cols_8b_iterptr;
-            q31_t sum = bias[0] + biasR[0];\n"""
+            q31_t sum = bias[0];\n"""
 
         retString += self._genConvLeftString()
 
         if self.fp_requantize:
             retString += """
-            sum = (float) sum * *scales;
+            sum = (float) (sum + biasR[0]) * *scales;
             sum += output_offset;
             sum = TN_MAX(sum, activation_min);
             sum = TN_MIN(sum, activation_max);
@@ -644,14 +645,15 @@ class depthwiseInplace:
         retString += "    #define STRIDE " + str(self.stride) + "\n"
         retString += "    int i, j;\n"
 
-        # initialize accumulators as bias
+        # initialize accumulators as bias; biasR, the part of the folded bias int32 cannot hold, is added once
+        # after the MACs, which may bring the sum back into range
         retString += """    /* MACs for each output */
     for (j = 0; j < output_x; j++) {
         for (i = 0; i < output_y / 2; i++) {
             q7_t *cols_8b = cols_8b_iterptr;
 
-            q31_t sum0 = bias[0] + biasR[0];
-            q31_t sum1 = bias[0] + biasR[0];
+            q31_t sum0 = bias[0];
+            q31_t sum1 = bias[0];
             """
         # computation
         retString += """
@@ -662,13 +664,13 @@ class depthwiseInplace:
         if self.fp_requantize:
             retString += """
             /* requantize */
-            sum0 = (float) sum0 * *scales;
+            sum0 = (float) (sum0 + biasR[0]) * *scales;
             sum0 += output_offset;
             sum0 = TN_MAX(sum0, activation_min);
             sum0 = TN_MIN(sum0, activation_max);
             output[(i * output_x + j * 2) * channel_offset] = sum0;
 
-            sum1 = (float) sum1 * *scales;
+            sum1 = (float) (sum1 + biasR[0]) * *scales;
             sum1 += output_offset;
             sum1 = TN_MAX(sum1, activation_min);
             sum1 = TN_MIN(sum1, activation_max);
@@ -699,13 +701,13 @@ class depthwiseInplace:
         # left over for odd dimension
         retString += """if (output_y & 1) {
             q7_t * cols_8b = cols_8b_iterptr;
-            q31_t sum = bias[0] + biasR[0];\n"""
+            q31_t sum = bias[0];\n"""
 
         retString += self._genConvLeftStringCWH()
 
         if self.fp_requantize:
             retString += """
-            sum = (float) sum * *scales;
+            sum = (float) (sum + biasR[0]) * *scales;
             sum += output_offset;
             sum = TN_MAX(sum, activation_min);
             sum = TN_MIN(sum, activation_max);
