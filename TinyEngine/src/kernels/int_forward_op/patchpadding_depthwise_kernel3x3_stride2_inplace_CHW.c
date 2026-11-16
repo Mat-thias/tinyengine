@@ -92,6 +92,7 @@ tinyengine_status patchpadding_depthwise_kernel3x3_stride2_inplace_CHW(q7_t *inp
 		input++;
 		ksrc += 9;
     }
+    return STATE_SUCCESS;
 }
 void patch_depthwise_kernel3x3_stride2_inplace_kernel_CHW(
 		const uint16_t output_y, const uint16_t output_x,
