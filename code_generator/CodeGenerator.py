@@ -71,6 +71,7 @@ class CodeGenerator:
         self.BIT = precision
         self.unsigned_input = unsigned_input
         self.patch_params = patch_params
+        self.patch_layers = []  # set by _genPatchInference, which takes them out of the schedule
         self.FP_output = FP_output
         self.profile_mode = profile_mode
         self.fp_requantize = fp_requantize
@@ -147,7 +148,7 @@ void update_SGD(float learning_rate){\n"""
 
         # generate operatior kernels
         if gen_kernels:
-            op_gen = OpGenerator(include_path, source_path, self.MemSche.layer, self.fp_requantize)
+            op_gen = OpGenerator(include_path, source_path, self.MemSche.layer, self.fp_requantize, self.patch_layers)
             op_gen.genOpcode()
 
     def _genDetprocessing(self):
@@ -361,6 +362,7 @@ void invoke_1patch(uint16_t pad_t, uint16_t pad_b, uint16_t pad_l ,uint16_t pad_
             # remove these layers for patching for the following code gen
             for layer in patch_layers:
                 schedule.layer.remove(layer)
+            self.patch_layers = patch_layers
 
             string = "}\n\n"
 

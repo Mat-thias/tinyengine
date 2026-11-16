@@ -16,17 +16,18 @@
 # Target ISA:  ARMv7E-M
 # ----------------------------------------------------------------------
 
-from .codetemplate.depthwiseTemplate import depthwiseInplace
+from .codetemplate.depthwiseTemplate import depthwiseInplace, patchDepthwiseInplace
 from .codetemplate.depthwiseTemplate_bitmask import depthwiseInplace_bitmask
 from .codetemplate.depthwiseTemplate_mask import depthwiseInplace_mask
 
 
 class OpGenerator:
-    def __init__(self, incpath, srcpath, layers, fp_requantize=False):
+    def __init__(self, incpath, srcpath, layers, fp_requantize=False, patch_layers=()):
         self.incpath = incpath
         self.srcpath = srcpath
         self.layers = layers
         self.fp_requantize = fp_requantize
+        self.patch_layers = patch_layers
 
     def genOpcode(self):
         # find all conv ops
@@ -62,6 +63,17 @@ class OpGenerator:
                 incfile.addDefine(depthwise_template_mask.genFuncDefine())
                 depthwise_template_bitmask.genFile(self.srcpath)
                 incfile.addDefine(depthwise_template_bitmask.genFuncDefine())
+
+        # patch-stage depthwise kernels; the 3x3 ones with stride 1 and 2 are hand-written in TinyEngine/src
+        patch_dw = {
+            (info["kernel_h"], info["kernel_w"], info["stride_h"])
+            for info in (op.get_layer_info() for op in self.patch_layers)
+            if info["op"] == "DEPTHWISE_CONV_2D"
+        }
+        for kernel_h, kernel_w, stride in sorted(patch_dw - {(3, 3, 1), (3, 3, 2)}):
+            patch_template = patchDepthwiseInplace(kernel_h, kernel_w, stride)
+            patch_template.genFile(self.srcpath)
+            incfile.addDefine(patch_template.genFuncDefine())
 
         incfile.writeFile()
 

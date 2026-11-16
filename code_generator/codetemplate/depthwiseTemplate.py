@@ -737,6 +737,142 @@ class depthwiseInplace:
         return retString
 
 
+class patchDepthwiseInplace(depthwiseInplace):
+    """Patch-stage depthwise kernel (patchpadding_*), for any kernel size and stride.
+
+    A patch already carries its halo, so the im2col buffer is input_x wide and only the sides
+    on the image border are padded, by the pad_t/b/l/r passed at run time. The hand-written
+    3x3 versions in TinyEngine/src/kernels/int_forward_op are what this generalizes.
+    """
+
+    def __init__(self, kernel_h, kernel_w, stride):
+        super().__init__(kernel_h, kernel_w, (kernel_h - 1) // 2, (kernel_w - 1) // 2, stride, "CHW", False)
+
+    def _getFunctionName(self):
+        return "patchpadding_" + super()._getFunctionName()
+
+    def _getKernelName(self):
+        return "patch_" + super()._getKernelName()
+
+    def genFuncDefine(self):
+        return super().genFuncDefine()[:-1] + (
+            ",\n                const uint16_t pad_t, const uint16_t pad_b, const uint16_t pad_l, const uint16_t pad_r)"
+        )
+
+    def _genCode(self):
+        return (
+            self._genHeader()
+            + self._genKernelDefine()
+            + ";\n"
+            + self.genFuncDefine()
+            + """
+{
+    uint16_t c, i, j;
+    q7_t *cols_8b_start = (q7_t *)runtime_buf;
+    q7_t *cols_8b = cols_8b_start;
+    const q7_t *src;
+    const q7_t *ksrc = kernel;
+    q7_t *inplace_out = output;
+    q7_t PAD8 = pad_value;
+
+    /* pad the border sides once; every channel overwrites only the interior */
+    int padding_cnt = pad_t * input_x;
+    input += padding_cnt * input_ch;
+    while (padding_cnt--) *cols_8b++ = PAD8;
+    for (i = pad_t; i < input_y - pad_b; i++) {
+        for (j = 0; j < pad_l; j++) *cols_8b++ = PAD8;
+        cols_8b += input_x - (pad_l + pad_r);
+        for (j = 0; j < pad_r; j++) *cols_8b++ = PAD8;
+    }
+    padding_cnt = pad_b * input_x;
+    while (padding_cnt--) *cols_8b++ = PAD8;
+
+    for (c = 0; c < input_ch; c++) {
+        src = input;
+        cols_8b = cols_8b_start + pad_t * input_x;
+        for (i = pad_t; i < input_y - pad_b; i++) {
+            cols_8b += pad_l;
+            src += pad_l * input_ch;
+            for (j = pad_l; j < input_x - pad_r; j++) {
+                *cols_8b++ = *src;
+                src += input_ch;
+            }
+            cols_8b += pad_r;
+            src += pad_r * input_ch;
+        }
+        """
+            + self._getKernelName()
+            + """(output_y, output_x, bias++, biasR++, ksrc, output_mult++, output_shift++, inplace_out,
+            output_offset, output_activation_min, output_activation_max, cols_8b_start, input_x, input_ch);
+        inplace_out++;
+        input++;
+        ksrc += """
+            + str(self.kernel_h * self.kernel_w)
+            + """;
+    }
+    return STATE_SUCCESS;
+}
+"""
+            + self._genKernel()
+        )
+
+    def _genMACs(self, sums):
+        # sums: (accumulator, column offset) pairs computed from the same window rows
+        lines = []
+        for r in range(self.kernel_h):
+            if r:
+                lines.append("            cols_8b += column_x;")
+            for c in range(self.kernel_w):
+                for s, off in sums:
+                    lines.append(f"            {s} += cols_8b[{c + off}]*ksrc[{r * self.kernel_w + c}];")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _genRequantize(s, out_x):
+        return f"""            {s} = arm_nn_requantize({s} + biasR[0], *multiplier, *shift);
+            {s} += output_offset;
+            {s} = TN_MAX({s}, activation_min);
+            {s} = TN_MIN({s}, activation_max);
+            output[(i * output_x + {out_x}) * channel_offset] = {s};
+"""
+
+    def _genKernel(self):
+        return (
+            self._genKernelDefine()
+            + """
+{
+    #define STRIDE """
+            + str(self.stride)
+            + """
+    int i, j;
+    for (i = 0; i < output_y; i++) {
+        for (j = 0; j < output_x / 2; j++) {
+            q7_t *cols_8b = cols_8b_iterptr;
+            q31_t sum0 = bias[0];
+            q31_t sum1 = bias[0];
+"""
+            + self._genMACs([("sum0", 0), ("sum1", self.stride)])
+            + self._genRequantize("sum0", "j * 2")
+            + self._genRequantize("sum1", "j * 2 + 1")
+            + """            cols_8b_iterptr += STRIDE * 2;
+        }
+        if (output_x & 1) {
+            q7_t *cols_8b = cols_8b_iterptr;
+            q31_t sum = bias[0];
+"""
+            + self._genMACs([("sum", 0)])
+            + self._genRequantize("sum", "output_x - 1")
+            + """            cols_8b_iterptr += STRIDE;
+        }
+        /* the row consumed STRIDE * output_x columns; move to the next window row */
+        cols_8b_iterptr += STRIDE * (column_x - output_x);
+    }
+    #undef STRIDE
+}
+"""
+        )
+
+
 class includeFile(object):
     def _init_(self, path):
         self.path = path
