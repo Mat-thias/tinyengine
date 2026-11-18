@@ -254,7 +254,7 @@ class GeneralMemoryScheduler:
                         hin=params["input_h"], win=params["input_w"],
                         s_h=params["stride_h"], s_w=params["stride_w"],
                         d_h=1, d_w=1,
-                        p_h=padding, p_w=padding,
+                        p_t=padding, p_l=padding,
                         load_input_receptive_field=True
                     )
                     # if it is not the last consumed, it must be preserved, hence not in place
