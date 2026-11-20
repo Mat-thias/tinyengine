@@ -347,6 +347,18 @@ class MILPAllocator(BaseAllocator):
             Because all tensors are created at different points, we only need to check the end,
             so b cannot end before a begins.
             """
+
+            def dies_at_t0(t):
+                """
+                If a tensor that starts at layer 0 dies at layer 0
+
+                d_t when t's output starts at 0, so aliasing ends t there; otherwise t outlives 0.
+                """
+                if t in model.potential_inplace_tensors_in and \
+                    self.rectangles[self.rectangles[t]["inplace_tensor_out_idx"]]["start"] == 0:
+                    return model.decision_inplace_tensor_in[t]
+                return 0
+
             constraint_list = list()
             for t1, t2 in tensor_set:
                 start1 = self.rectangles[t1]["start"]
@@ -374,11 +386,9 @@ class MILPAllocator(BaseAllocator):
                         "both tensors should start at the begining of the model timeline, "
                         f"but got {t1} starting at {start1} and {t2} starting at {start2}"
                     )
+
                     constraint_list.append(
-                        end1 + end2 <= 1 + 2 * L * model.tensor_temporal_overlap[t1, t2]
-                    )
-                    constraint_list.append(
-                        end1 + end2 >= 2 - L * (1 - model.tensor_temporal_overlap[t1, t2])
+                        model.tensor_temporal_overlap[t1, t2] >= 1 - dies_at_t0(t1) - dies_at_t0(t2)
                     )
             return constraint_list
 
